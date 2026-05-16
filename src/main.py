@@ -147,6 +147,12 @@ def get_existing_vacancy(supabase: Client, source_channel: str, message_id: int)
     return rows[0] if rows else None
 
 
+def get_existing_by_hash(supabase: Client, content_hash: str) -> dict | None:
+    res = supabase.table("vacancies").select("*").eq("content_hash", content_hash).limit(1).execute()
+    rows = res.data or []
+    return rows[0] if rows else None
+
+
 def mark_reposted(supabase: Client, vacancy_id: int) -> None:
     supabase.table("vacancies").update({"reposted_at": datetime.now(timezone.utc).isoformat()}).eq("id", vacancy_id).execute()
 
@@ -201,6 +207,8 @@ async def run() -> None:
                     continue
 
                 channel_accepted += 1
+                content_hash = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
+
                 existing = get_existing_vacancy(supabase, source_channel, msg.id)
                 vacancy_id = None
 
@@ -211,30 +219,43 @@ async def run() -> None:
                     raw_text = existing.get("raw_text") or raw_text
                     source_url = existing.get("source_url") or build_source_url(source_channel, msg.id)
                 else:
-                    content_hash = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
-                    fields = extract_fields(raw_text)
+                    duplicate_by_hash = get_existing_by_hash(supabase, content_hash)
+                    if duplicate_by_hash:
+                        dup_id = duplicate_by_hash.get("id")
+                        if duplicate_by_hash.get("reposted_at") is not None:
+                            print(
+                                f"Skip duplicate content_hash for channel={source_channel} "
+                                f"message_id={msg.id} existing_id={dup_id}"
+                            )
+                            continue
 
-                    row = {
-                        "source_channel": source_channel,
-                        "source_message_id": msg.id,
-                        "published_at": to_iso(msg.date) or datetime.now(timezone.utc).isoformat(),
-                        "raw_text": raw_text,
-                        "title": fields["title"],
-                        "company": fields["company"],
-                        "salary": fields["salary"],
-                        "location": fields["location"],
-                        "stack": fields["stack"],
-                        "contact": fields["contact"],
-                        "source_url": build_source_url(source_channel, msg.id),
-                        "content_hash": content_hash,
-                        "reposted_at": None,
-                    }
+                        vacancy_id = dup_id
+                        raw_text = duplicate_by_hash.get("raw_text") or raw_text
+                        source_url = duplicate_by_hash.get("source_url") or build_source_url(source_channel, msg.id)
+                    else:
+                        fields = extract_fields(raw_text)
 
-                    insert_res = supabase.table("vacancies").insert(row).execute()
-                    inserted = insert_res.data or []
-                    if inserted:
-                        vacancy_id = inserted[0].get("id")
-                    source_url = row["source_url"]
+                        row = {
+                            "source_channel": source_channel,
+                            "source_message_id": msg.id,
+                            "published_at": to_iso(msg.date) or datetime.now(timezone.utc).isoformat(),
+                            "raw_text": raw_text,
+                            "title": fields["title"],
+                            "company": fields["company"],
+                            "salary": fields["salary"],
+                            "location": fields["location"],
+                            "stack": fields["stack"],
+                            "contact": fields["contact"],
+                            "source_url": build_source_url(source_channel, msg.id),
+                            "content_hash": content_hash,
+                            "reposted_at": None,
+                        }
+
+                        insert_res = supabase.table("vacancies").insert(row).execute()
+                        inserted = insert_res.data or []
+                        if inserted:
+                            vacancy_id = inserted[0].get("id")
+                        source_url = row["source_url"]
 
                 post_text = (
                     "Новая вакансия\n\n"
