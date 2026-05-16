@@ -8,6 +8,8 @@ from dotenv import load_dotenv
 from supabase import Client, create_client
 from telethon import TelegramClient
 
+from parser.job_classifier import classify_job_post_with_details
+
 load_dotenv()
 
 TG_API_ID = int(os.getenv("TG_API_ID", "0"))
@@ -150,20 +152,33 @@ async def run() -> None:
 
         messages.reverse()
         reposted_count = 0
+        accepted_count = 0
+        rejected_count = 0
 
         for msg in messages:
+            raw_text = msg.message.strip()
+            cls = classify_job_post_with_details(raw_text)
+            decision = "ACCEPT" if cls["accepted"] else "REJECT"
+            print(
+                f"Classifier message_id={msg.id} score={cls['score']} confidence={cls['confidence']} "
+                f"decision={decision} positives={cls['matched_positive']} negatives={cls['matched_negative']}"
+            )
+
+            if not cls["accepted"]:
+                rejected_count += 1
+                continue
+
+            accepted_count += 1
             existing = get_existing_vacancy(supabase, source_channel, msg.id)
             vacancy_id = None
 
             if existing:
                 vacancy_id = existing.get("id")
-                # Skip only if we already posted this vacancy to target chat.
                 if existing.get("reposted_at") is not None:
                     continue
-                raw_text = existing.get("raw_text") or msg.message.strip()
+                raw_text = existing.get("raw_text") or raw_text
                 source_url = existing.get("source_url") or build_source_url(source_channel, msg.id)
             else:
-                raw_text = msg.message.strip()
                 content_hash = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
                 fields = extract_fields(raw_text)
 
@@ -205,7 +220,10 @@ async def run() -> None:
             else:
                 print(f"Repost failed for message {msg.id}: {err}")
 
-        print(f"Processed: {len(messages)}, reposted: {reposted_count}")
+        print(
+            f"Processed: {len(messages)}, accepted: {accepted_count}, "
+            f"rejected: {rejected_count}, reposted: {reposted_count}"
+        )
 
 
 if __name__ == "__main__":
