@@ -105,16 +105,21 @@ def repost_to_bot(text: str) -> tuple[bool, str]:
     return True, ""
 
 
-def exists_in_db(supabase: Client, source_channel: str, message_id: int) -> bool:
+def get_existing_vacancy(supabase: Client, source_channel: str, message_id: int) -> dict | None:
     res = (
         supabase.table("vacancies")
-        .select("id")
+        .select("*")
         .eq("source_channel", source_channel)
         .eq("source_message_id", message_id)
         .limit(1)
         .execute()
     )
-    return bool(res.data)
+    rows = res.data or []
+    return rows[0] if rows else None
+
+
+def mark_reposted(supabase: Client, vacancy_id: int) -> None:
+    supabase.table("vacancies").update({"reposted_at": datetime.now(timezone.utc).isoformat()}).eq("id", vacancy_id).execute()
 
 
 async def run() -> None:
@@ -144,45 +149,63 @@ async def run() -> None:
                 messages.append(message)
 
         messages.reverse()
-        new_count = 0
+        reposted_count = 0
 
         for msg in messages:
-            if exists_in_db(supabase, source_channel, msg.id):
-                continue
+            existing = get_existing_vacancy(supabase, source_channel, msg.id)
+            vacancy_id = None
 
-            raw_text = msg.message.strip()
-            content_hash = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
-            fields = extract_fields(raw_text)
+            if existing:
+                vacancy_id = existing.get("id")
+                # Skip only if we already posted this vacancy to target chat.
+                if existing.get("reposted_at") is not None:
+                    continue
+                raw_text = existing.get("raw_text") or msg.message.strip()
+                source_url = existing.get("source_url") or build_source_url(source_channel, msg.id)
+            else:
+                raw_text = msg.message.strip()
+                content_hash = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
+                fields = extract_fields(raw_text)
 
-            row = {
-                "source_channel": source_channel,
-                "source_message_id": msg.id,
-                "published_at": to_iso(msg.date) or datetime.now(timezone.utc).isoformat(),
-                "raw_text": raw_text,
-                "title": fields["title"],
-                "company": fields["company"],
-                "salary": fields["salary"],
-                "location": fields["location"],
-                "stack": fields["stack"],
-                "contact": fields["contact"],
-                "source_url": build_source_url(source_channel, msg.id),
-                "content_hash": content_hash,
-            }
+                row = {
+                    "source_channel": source_channel,
+                    "source_message_id": msg.id,
+                    "published_at": to_iso(msg.date) or datetime.now(timezone.utc).isoformat(),
+                    "raw_text": raw_text,
+                    "title": fields["title"],
+                    "company": fields["company"],
+                    "salary": fields["salary"],
+                    "location": fields["location"],
+                    "stack": fields["stack"],
+                    "contact": fields["contact"],
+                    "source_url": build_source_url(source_channel, msg.id),
+                    "content_hash": content_hash,
+                    "reposted_at": None,
+                }
 
-            supabase.table("vacancies").insert(row).execute()
+                insert_res = supabase.table("vacancies").insert(row).execute()
+                inserted = insert_res.data or []
+                if inserted:
+                    vacancy_id = inserted[0].get("id")
+                source_url = row["source_url"]
 
             post_text = (
                 "Новая вакансия\n\n"
                 f"{raw_text}\n\n"
-                f"Источник: {row['source_url'] or source_channel}"
+                f"Источник: {source_url or source_channel}"
             )
             ok, err = repost_to_bot(post_text)
             if ok:
-                new_count += 1
+                reposted_count += 1
+                if vacancy_id is not None:
+                    try:
+                        mark_reposted(supabase, vacancy_id)
+                    except Exception as exc:
+                        print(f"Warning: cannot update reposted_at for vacancy {vacancy_id}: {exc}")
             else:
                 print(f"Repost failed for message {msg.id}: {err}")
 
-        print(f"Processed: {len(messages)}, new: {new_count}")
+        print(f"Processed: {len(messages)}, reposted: {reposted_count}")
 
 
 if __name__ == "__main__":
