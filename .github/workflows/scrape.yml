@@ -2,8 +2,6 @@ name: Scrape Telegram Jobs
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '*/5 * * * *'
 
 jobs:
   scrape:
