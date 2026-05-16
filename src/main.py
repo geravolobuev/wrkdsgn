@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -77,6 +78,60 @@ def get_source_channels() -> list[str]:
     return channels
 
 
+def to_iso(ts) -> str | None:
+    if ts is None:
+        return None
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(timezone.utc).isoformat()
+
+
+def slugify(value: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9]+", "-", value).strip("-").lower()
+    return cleaned[:90] if cleaned else "job"
+
+
+def infer_seniority(text: str) -> str | None:
+    low = text.lower()
+    if "junior" in low or "джун" in low:
+        return "junior"
+    if "middle" in low or "мид" in low:
+        return "middle"
+    if "senior" in low or "сеньор" in low:
+        return "senior"
+    if "lead" in low or "тимлид" in low:
+        return "lead"
+    if "intern" in low or "стаж" in low:
+        return "intern"
+    return None
+
+
+def infer_remote(text: str) -> bool:
+    low = text.lower()
+    return any(token in low for token in ["remote", "удален", "удалён", "гибрид", "hybrid"])
+
+
+def infer_tags(text: str) -> list[str]:
+    low = text.lower()
+    tags: list[str] = []
+    dictionary = {
+        "ux": ["ux"],
+        "ui": ["ui"],
+        "product": ["product designer", "product"],
+        "graphic": ["graphic", "графическ"],
+        "motion": ["motion"],
+        "brand": ["brand", "branding"],
+        "web": ["web", "веб"],
+        "mobile": ["mobile", "ios", "android"],
+        "figma": ["figma"],
+        "freelance": ["freelance", "фриланс"],
+    }
+    for tag, needles in dictionary.items():
+        if any(n in low for n in needles):
+            tags.append(tag)
+    return tags
+
+
 def extract_fields(text: str) -> dict:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     title = lines[0] if lines else None
@@ -90,12 +145,21 @@ def extract_fields(text: str) -> dict:
         low = line.lower()
         if company is None and ("компан" in low or "company" in low):
             company = line
-        if salary is None and ("зарп" in low or "$" in line or "₽" in line or "usd" in low):
+        if salary is None and (
+            "зарп" in low or "$" in line or "₽" in line or "usd" in low or "eur" in low
+        ):
             salary = line
-        if location is None and ("удален" in low or "remote" in low or "офис" in low or "location" in low):
+        if location is None and (
+            "удален" in low or "удалён" in low or "remote" in low or "офис" in low or "location" in low
+        ):
             location = line
         if contact is None and ("@" in line or "tg:" in low or "контакт" in low):
             contact = line
+
+    description = text.strip()
+    seniority = infer_seniority(description)
+    remote = infer_remote(description)
+    tags = infer_tags(description)
 
     return {
         "title": title,
@@ -104,6 +168,10 @@ def extract_fields(text: str) -> dict:
         "location": location,
         "stack": None,
         "contact": contact,
+        "description": description,
+        "seniority": seniority,
+        "remote": remote,
+        "tags": tags,
     }
 
 
@@ -111,14 +179,6 @@ def build_source_url(channel: str, message_id: int) -> str | None:
     if channel.startswith("@"):
         return f"https://t.me/{channel[1:]}/{message_id}"
     return None
-
-
-def to_iso(ts) -> str | None:
-    if ts is None:
-        return None
-    if ts.tzinfo is None:
-        ts = ts.replace(tzinfo=timezone.utc)
-    return ts.astimezone(timezone.utc).isoformat()
 
 
 def repost_to_bot(text: str) -> tuple[bool, str]:
@@ -217,7 +277,7 @@ async def run() -> None:
                     if existing.get("reposted_at") is not None:
                         continue
                     raw_text = existing.get("raw_text") or raw_text
-                    source_url = existing.get("source_url") or build_source_url(source_channel, msg.id)
+                    source_url = existing.get("source_link") or existing.get("source_url") or build_source_url(source_channel, msg.id)
                 else:
                     duplicate_by_hash = get_existing_by_hash(supabase, content_hash)
                     if duplicate_by_hash:
@@ -231,9 +291,15 @@ async def run() -> None:
 
                         vacancy_id = dup_id
                         raw_text = duplicate_by_hash.get("raw_text") or raw_text
-                        source_url = duplicate_by_hash.get("source_url") or build_source_url(source_channel, msg.id)
+                        source_url = (
+                            duplicate_by_hash.get("source_link")
+                            or duplicate_by_hash.get("source_url")
+                            or build_source_url(source_channel, msg.id)
+                        )
                     else:
                         fields = extract_fields(raw_text)
+                        source_link = build_source_url(source_channel, msg.id)
+                        slug = slugify(f"{fields['title'] or 'job'}-{source_channel.strip('@')}-{msg.id}")
 
                         row = {
                             "source_channel": source_channel,
@@ -246,7 +312,13 @@ async def run() -> None:
                             "location": fields["location"],
                             "stack": fields["stack"],
                             "contact": fields["contact"],
-                            "source_url": build_source_url(source_channel, msg.id),
+                            "description": fields["description"],
+                            "remote": fields["remote"],
+                            "seniority": fields["seniority"],
+                            "tags": fields["tags"],
+                            "source_link": source_link,
+                            "source_url": source_link,
+                            "slug": slug,
                             "content_hash": content_hash,
                             "reposted_at": None,
                         }
@@ -255,7 +327,7 @@ async def run() -> None:
                         inserted = insert_res.data or []
                         if inserted:
                             vacancy_id = inserted[0].get("id")
-                        source_url = row["source_url"]
+                        source_url = source_link
 
                 post_text = (
                     "Новая вакансия\n\n"

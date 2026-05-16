@@ -6,10 +6,17 @@
 __pycache__/
 *.pyc
 
+# Frontend
+web/node_modules/
+web/.next/
+
 # Secrets
 .env
 *.session
 session.b64
+
+# Editor temp
+*.swp
 
 # Local continuity notes
 CONTINUITY.md
