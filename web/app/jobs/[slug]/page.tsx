@@ -19,7 +19,7 @@ export default async function JobDetailPage({ params }: { params: { slug: string
         <p className="text-soft">
           {job.company || "Unknown company"} · {job.location || "Location not specified"}
         </p>
-        <p className="text-sm text-soft">Published {formatRelativeDate(job.created_at)}</p>
+        <p className="text-sm text-soft">Published {formatRelativeDate(job.published_at || job.created_at)}</p>
       </header>
 
       <div className="flex flex-wrap items-center gap-2">

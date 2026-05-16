@@ -12,6 +12,7 @@ export interface Job {
   source_channel: string;
   source_link: string | null;
   created_at: string;
+  published_at: string | null;
   slug: string;
 }
 
@@ -20,5 +21,4 @@ export interface JobsFilters {
   tag?: string;
   remote?: "true" | "false";
   seniority?: string;
-  page?: string;
 }
