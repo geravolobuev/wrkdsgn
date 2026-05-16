@@ -31,6 +31,7 @@ jobs:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_TARGET_CHAT_ID: ${{ secrets.TG_TARGET_CHAT_ID }}
           SOURCE_CHANNEL: ${{ secrets.SOURCE_CHANNEL }}
+          SOURCE_CHANNELS: ${{ secrets.SOURCE_CHANNELS }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TELETHON_SESSION_NAME: telegram_session
