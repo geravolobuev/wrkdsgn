@@ -1,0 +1,40 @@
+name: Scrape Telegram Jobs
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/15 * * * *'
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Restore Telethon session
+        run: |
+          if [ -n "${{ secrets.TELETHON_SESSION_B64 }}" ]; then
+            echo "${{ secrets.TELETHON_SESSION_B64 }}" | base64 -d > telegram_session.session
+          fi
+
+      - name: Run scraper
+        env:
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_TARGET_CHAT_ID: ${{ secrets.TG_TARGET_CHAT_ID }}
+          SOURCE_CHANNEL: ${{ secrets.SOURCE_CHANNEL }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          TELETHON_SESSION_NAME: telegram_session
+          FETCH_LIMIT: 30
+        run: python src/main.py
