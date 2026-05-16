@@ -22,6 +22,8 @@ export function JobsFeedClient() {
   const [loading, setLoading] = useState(false);
   const [openId, setOpenId] = useState<number | null>(null);
 
+  const loadingRef = useRef(false);
+
   const q = searchParams.get("q") || "";
   const tag = searchParams.get("tag") || "";
   const remote = searchParams.get("remote") || "";
@@ -31,30 +33,35 @@ export function JobsFeedClient() {
 
   const loadPage = useCallback(
     async (targetPage: number, replace: boolean) => {
-      if (loading) return;
+      if (loadingRef.current) return;
+
+      loadingRef.current = true;
       setLoading(true);
 
-      const params = new URLSearchParams();
-      if (q) params.set("q", q);
-      if (tag) params.set("tag", tag);
-      if (remote) params.set("remote", remote);
-      if (seniority) params.set("seniority", seniority);
-      params.set("page", String(targetPage));
+      try {
+        const params = new URLSearchParams();
+        if (q) params.set("q", q);
+        if (tag) params.set("tag", tag);
+        if (remote) params.set("remote", remote);
+        if (seniority) params.set("seniority", seniority);
+        params.set("page", String(targetPage));
 
-      const response = await fetch(`/api/jobs?${params.toString()}`, { cache: "no-store" });
-      const data = (await response.json()) as ApiResponse;
+        const response = await fetch(`/api/jobs?${params.toString()}`, { cache: "no-store" });
+        const data = (await response.json()) as ApiResponse;
 
-      if (!response.ok || data.error) {
+        if (!response.ok || data.error) {
+          return;
+        }
+
+        setJobs((prev) => (replace ? data.jobs : [...prev, ...data.jobs]));
+        setPage(data.page);
+        setHasMore(Boolean(data.hasMore));
+      } finally {
+        loadingRef.current = false;
         setLoading(false);
-        return;
       }
-
-      setJobs((prev) => (replace ? data.jobs : [...prev, ...data.jobs]));
-      setPage(data.page);
-      setHasMore(Boolean(data.hasMore));
-      setLoading(false);
     },
-    [loading, q, tag, remote, seniority]
+    [q, tag, remote, seniority]
   );
 
   useEffect(() => {
@@ -68,12 +75,12 @@ export function JobsFeedClient() {
   const sentinelRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (!sentinelRef.current || !hasMore || loading) return;
+    if (!sentinelRef.current || !hasMore) return;
 
     const observer = new IntersectionObserver(
       (entries) => {
         const first = entries[0];
-        if (first?.isIntersecting && hasMore && !loading) {
+        if (first?.isIntersecting && hasMore && !loadingRef.current) {
           void loadPage(page + 1, false);
         }
       },
@@ -82,7 +89,7 @@ export function JobsFeedClient() {
 
     observer.observe(sentinelRef.current);
     return () => observer.disconnect();
-  }, [page, hasMore, loading, loadPage]);
+  }, [page, hasMore, loadPage]);
 
   function onSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -150,7 +157,12 @@ export function JobsFeedClient() {
       <div className="space-y-3">
         {jobs.length === 0 && !loading ? <p className="text-sm text-soft">No jobs found.</p> : null}
         {jobs.map((job) => (
-          <JobCard key={job.id} job={job} isOpen={openId === job.id} onToggle={(id) => setOpenId((prev) => (prev === id ? null : id))} />
+          <JobCard
+            key={job.id}
+            job={job}
+            isOpen={openId === job.id}
+            onToggle={(id) => setOpenId((prev) => (prev === id ? null : id))}
+          />
         ))}
       </div>
 
