@@ -1,12 +1,16 @@
 import asyncio
 import hashlib
 import os
+import sys
 from datetime import datetime, timezone
+from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
 from supabase import Client, create_client
 from telethon import TelegramClient
+
+sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from parser.job_classifier import classify_job_post_with_details
 
