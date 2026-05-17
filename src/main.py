@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
+from postgrest.exceptions import APIError
 from supabase import Client, create_client
 from telethon import TelegramClient
 
@@ -276,6 +277,15 @@ def merge_metadata(base: dict, ai: EnrichmentResult | None) -> dict:
     return merged
 
 
+def is_duplicate_content_hash_error(exc: Exception) -> bool:
+    if not isinstance(exc, APIError):
+        return False
+    payload = getattr(exc, "args", [None])[0]
+    if not isinstance(payload, dict):
+        return False
+    return payload.get("code") == "23505" and "content_hash" in (payload.get("message") or "")
+
+
 async def run() -> None:
     validate_env()
     supabase = make_supabase()
@@ -377,7 +387,17 @@ async def run() -> None:
                 if existing:
                     supabase.table("vacancies").update(row).eq("id", existing["id"]).execute()
                 else:
-                    supabase.table("vacancies").insert(row).execute()
+                    try:
+                        supabase.table("vacancies").insert(row).execute()
+                    except Exception as exc:
+                        # Race-safe fallback: another run inserted same content_hash concurrently.
+                        if is_duplicate_content_hash_error(exc):
+                            print(
+                                f"Skip insert duplicate content_hash for channel={source_channel} "
+                                f"message_id={msg.id}"
+                            )
+                            continue
+                        raise
 
                 channel_saved += 1
                 total_saved += 1
