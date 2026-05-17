@@ -283,7 +283,10 @@ def is_duplicate_content_hash_error(exc: Exception) -> bool:
     payload = getattr(exc, "args", [None])[0]
     if not isinstance(payload, dict):
         return False
-    return payload.get("code") == "23505" and "content_hash" in (payload.get("message") or "")
+    # Be tolerant to payload format differences across postgrest client versions.
+    if payload.get("code") != "23505":
+        return False
+    return payload.get("code") == "23505"
 
 
 async def run() -> None:
@@ -387,17 +390,12 @@ async def run() -> None:
                 if existing:
                     supabase.table("vacancies").update(row).eq("id", existing["id"]).execute()
                 else:
-                    try:
-                        supabase.table("vacancies").insert(row).execute()
-                    except Exception as exc:
-                        # Race-safe fallback: another run inserted same content_hash concurrently.
-                        if is_duplicate_content_hash_error(exc):
-                            print(
-                                f"Skip insert duplicate content_hash for channel={source_channel} "
-                                f"message_id={msg.id}"
-                            )
-                            continue
-                        raise
+                    # Conflict-safe insert: ignore duplicate content_hash at DB level.
+                    supabase.table("vacancies").upsert(
+                        row,
+                        on_conflict="content_hash",
+                        ignore_duplicates=True,
+                    ).execute()
 
                 channel_saved += 1
                 total_saved += 1
