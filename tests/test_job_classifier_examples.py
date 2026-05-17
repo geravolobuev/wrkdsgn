@@ -3,15 +3,13 @@ from pathlib import Path
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from parser.job_classifier import calculate_job_score, classify_job_post, classify_job_post_with_details
+from job_parser.job_classifier import classify_job_or_ad_by_score, job_score
 
 
 def _print_case(name: str, text: str) -> None:
-    result = classify_job_post_with_details(text)
-    print(
-        f"{name}: accepted={result['accepted']} score={result['score']} confidence={result['confidence']} "
-        f"positives={result['matched_positive']} negatives={result['matched_negative']}"
-    )
+    score = job_score(text)
+    decision = classify_job_or_ad_by_score(text)
+    print(f"{name}: decision={decision} score={score}")
 
 
 def run_examples() -> None:
@@ -39,13 +37,13 @@ def run_examples() -> None:
     _print_case("ambiguous_post", ambiguous_post)
     _print_case("freelance_hiring", freelance_hiring)
 
-    assert classify_job_post(valid_vacancy) is True
-    assert classify_job_post(invalid_news) is False
-    assert classify_job_post(ambiguous_post) is False
-    assert classify_job_post(freelance_hiring) is True
+    assert classify_job_or_ad_by_score(valid_vacancy) == "JOB"
+    assert classify_job_or_ad_by_score(invalid_news) == "AD"
+    assert classify_job_or_ad_by_score(ambiguous_post) in {"AD", "UNCERTAIN"}
+    assert classify_job_or_ad_by_score(freelance_hiring) == "JOB"
 
-    assert calculate_job_score(valid_vacancy) > 0
-    assert calculate_job_score(invalid_news) < 0
+    assert job_score(valid_vacancy) >= 3
+    assert job_score(invalid_news) <= 0
 
 
 if __name__ == "__main__":

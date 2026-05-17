@@ -13,13 +13,13 @@ from telethon import TelegramClient
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from parser.ad_classifier import is_ad_or_funnel
-from parser.job_classifier import classify_job_or_ad_by_score, job_score
-from parser.job_splitter import split_jobs
-from parser.location_extractor import extract_location
-from parser.openrouter_client import classify_uncertain_job_ad, enrich_vacancy_with_ai
-from parser.role_extractor import extract_canonical_role
-from parser.taxonomy_mapper import map_role_to_taxonomy
+from job_parser.ad_classifier import is_ad_or_funnel
+from job_parser.job_classifier import classify_job_or_ad_by_score, job_score
+from job_parser.job_splitter import split_jobs
+from job_parser.location_extractor import extract_location
+from job_parser.openrouter_client import classify_uncertain_job_ad, enrich_vacancy_with_ai
+from job_parser.role_extractor import extract_canonical_role
+from job_parser.taxonomy_mapper import map_role_to_taxonomy
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")

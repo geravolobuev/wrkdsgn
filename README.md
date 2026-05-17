@@ -12,9 +12,13 @@ Telegram channels -> deterministic pre-filter -> OpenRouter enrichment (ingestio
 
 ## 1) Architecture Changes
 
-- `parser/deterministic_prefilter.py` rejects obvious non-job content before AI calls.
-- `src/enrichment/openrouter_client.py` performs strict JSON enrichment via OpenRouter free models.
-- `src/main.py` uses cache/version logic and never re-enriches unchanged posts.
+- `parser/job_classifier.py` applies deterministic score gate: `JOB` / `AD` / `UNCERTAIN`.
+- `parser/ad_classifier.py` detects ad/funnel patterns (courses, registration campaigns).
+- `parser/job_splitter.py` splits multi-job digests into one record per role.
+- `parser/role_extractor.py` extracts canonical profession title.
+- `parser/taxonomy_mapper.py` maps roles to strict allowed specializations.
+- `parser/openrouter_client.py` handles OpenRouter fallback and uncertain AI classifier.
+- `src/main.py` runs strict multi-stage ingestion with per-split idempotent hash.
 - `web/app/api/jobs/route.ts` filters by structured metadata columns.
 
 ## 2) DB Schema Updates
@@ -49,21 +53,22 @@ AI output is validated against these fixed enums.
 
 ## 4) Deterministic Classifier
 
-`parser/deterministic_prefilter.py`
+`parser/job_classifier.py`
 
-- regex + keyword score + metadata heuristics
-- rejects obvious non-job posts
-- dramatically reduces AI calls
+- score >= 3 => `JOB`
+- score <= 0 => `AD`
+- score in [1,2] => `UNCERTAIN` then AI `JOB/AD` classifier
 
-## 5) OpenRouter Enrichment Module
+## 5) OpenRouter Modules
 
-`src/enrichment/openrouter_client.py`
+`parser/openrouter_client.py`
 
 - OpenRouter only
-- configurable model
-- fallback models
-- timeout + retries + 429 backoff
-- strict JSON parsing + enum validation
+- fixed fallback chain (llama -> qwen -> gemma, optional `openrouter/free`)
+- timeout + per-model retries
+- strict JSON-only parsing + schema validation
+- deterministic fallback object when all models fail
+- uncertain-case classifier returns strict `JOB` / `AD`
 
 ## 6) Enrichment Cache Logic
 
@@ -75,6 +80,7 @@ Uses:
 - `enrichment_hash`
 - `enrichment_version`
 - `enriched_at`
+- split jobs hash includes source + message + split index + text
 
 Enrichment is skipped when unchanged and same version.
 
@@ -83,10 +89,15 @@ Enrichment is skipped when unchanged and same version.
 Pipeline in `src/main.py`:
 
 - fetch post
-- deterministic pre-filter
-- AI enrichment (if enabled)
-- normalize structured metadata
-- insert/update Supabase
+- deterministic score gate
+- AI fallback classifier only for uncertain posts
+- ad/funnel guard
+- multi-job split
+- canonical role extraction
+- strict taxonomy mapping
+- location extraction
+- OpenRouter enrichment merge
+- insert/upsert Supabase
 
 ## 8) Frontend Filtering Updates
 
@@ -115,7 +126,9 @@ From `.env.example`:
 - `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
 - `ENABLE_AI_ENRICHMENT=true`
 - `OPENROUTER_API_KEY`
-- `OPENROUTER_MODEL`
+- `OPENROUTER_TIMEOUT=10`
+- `OPENROUTER_MAX_RETRIES=1`
+- optional: `OPENROUTER_INCLUDE_GENERIC_FALLBACK=true`
 - `ENRICHMENT_VERSION`
 
 ### GitHub Actions secrets
