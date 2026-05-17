@@ -1,124 +1,135 @@
 # Design Jobs MVP (Free Tier Only)
 
-Minimal architecture:
+Architecture:
 
-Telegram channels -> Python scraper -> Supabase Postgres -> Next.js frontend
+Telegram channels -> deterministic pre-filter -> OpenRouter enrichment (ingestion only) -> Supabase -> Next.js frontend
 
-- Frontend hosting: Vercel free tier
-- Scraper hosting: Render free tier (or GitHub Actions + cron-job.org)
-- Database: Supabase free tier
+## Key Rules
 
-## 1. Updated Architecture
+- AI runs only during ingestion.
+- Frontend filtering/search reads structured DB fields only.
+- No vectors, no embeddings infra, no RAG, no paid search.
 
-- `src/main.py`: Telegram multi-channel scraper + deterministic classifier + dedup + normalized inserts
-- `supabase/migrations/*.sql`: schema migration for web-facing jobs model
-- `web/*`: Next.js App Router frontend with jobs feed, search, filters, job detail page
+## 1) Architecture Changes
 
-## 2. DB Schema (Supabase)
+- `parser/deterministic_prefilter.py` rejects obvious non-job content before AI calls.
+- `src/enrichment/openrouter_client.py` performs strict JSON enrichment via OpenRouter free models.
+- `src/main.py` uses cache/version logic and never re-enriches unchanged posts.
+- `web/app/api/jobs/route.ts` filters by structured metadata columns.
 
-Run migration:
+## 2) DB Schema Updates
+
+Run migrations in order:
 
 - `supabase/migrations/20260516_jobs_schema_mvp.sql`
+- `supabase/migrations/20260517_ai_enrichment_metadata.sql`
 
-Required fields in `vacancies` (MVP web):
+New structured metadata fields include:
 
-- `id`
-- `title`
-- `company`
-- `location`
-- `remote`
-- `seniority`
-- `tags`
-- `description`
-- `source_channel`
-- `source_link`
-- `created_at`
-- `slug`
+- `country`, `city`
+- `remote_type`, `employment_type`, `level`, `role_type`
+- `specializations[]`, `semantic_tags[]`, `tools[]`, `language[]`
+- `salary_min`, `salary_max`
+- `enriched_at`, `enrichment_version`, `enrichment_hash`, `is_job`
 
-## 3. Frontend Structure
+## 3) Taxonomy System
 
-- `web/app/page.tsx` -> `/`
-- `web/app/jobs/page.tsx` -> `/jobs`
-- `web/app/jobs/[slug]/page.tsx` -> `/jobs/[slug]`
-- `web/components/*` -> cards, filters, pagination
-- `web/lib/jobs.ts` -> Supabase search/filter queries
+Defined in `src/enrichment/taxonomy.py`:
 
-## 4. Supabase Setup
+- Levels
+- Specializations
+- Employment types
+- Remote types
+- Role types
+- Semantic tags
+- Tools
+- Languages
 
-1. Run SQL migration in Supabase SQL Editor.
-2. Enable read access for frontend (RLS policy) on `vacancies` for anon role.
-3. Copy:
-   - `NEXT_PUBLIC_SUPABASE_URL`
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+AI output is validated against these fixed enums.
 
-Example read policy (if RLS enabled):
+## 4) Deterministic Classifier
 
-```sql
-alter table public.vacancies enable row level security;
+`parser/deterministic_prefilter.py`
 
-create policy "vacancies_read_public"
-on public.vacancies
-for select
-to anon
-using (true);
-```
+- regex + keyword score + metadata heuristics
+- rejects obvious non-job posts
+- dramatically reduces AI calls
 
-## 5. Scraper Integration
+## 5) OpenRouter Enrichment Module
 
-The scraper keeps current architecture and now inserts normalized fields:
+`src/enrichment/openrouter_client.py`
 
-- `title, company, location, remote, seniority, tags, description, source_link, slug`
-- preserves deterministic classification from `parser/job_classifier.py`
-- preserves dedup:
-  - by `(source_channel, source_message_id)`
-  - by `content_hash` across channels
+- OpenRouter only
+- configurable model
+- fallback models
+- timeout + retries + 429 backoff
+- strict JSON parsing + enum validation
 
-## 6. Frontend Pages
+## 6) Enrichment Cache Logic
 
-- `/` simple landing
-- `/jobs` list + search + filters + pagination
-- `/jobs/[slug]` full description + source link + metadata
+`src/main.py`
 
-## 7. Search & Filtering
+Uses:
 
-Implemented via Supabase queries only (no paid tools):
+- `content_hash`
+- `enrichment_hash`
+- `enrichment_version`
+- `enriched_at`
 
-- keyword (`q`) over `title/company/description`
-- tag (`tag`)
-- remote (`remote=true`)
-- seniority (`seniority`)
-- pagination (`page`)
+Enrichment is skipped when unchanged and same version.
 
-## 8. Deployment Instructions
+## 7) Scraper Integration
 
-### Frontend (Vercel free)
+Pipeline in `src/main.py`:
 
-1. Import repo in Vercel.
-2. Set root directory: `web`.
-3. Add env vars:
-   - `NEXT_PUBLIC_SUPABASE_URL`
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
-4. Deploy.
+- fetch post
+- deterministic pre-filter
+- AI enrichment (if enabled)
+- normalize structured metadata
+- insert/update Supabase
 
-### Scraper (Render free, optional)
+## 8) Frontend Filtering Updates
 
-If you want scraper on Render free worker:
+`web/components/jobs-feed-client.tsx` and `web/app/api/jobs/route.ts`
 
-1. Create a new Background Worker from this repo root.
-2. Build command:
-   - `pip install -r requirements.txt`
-3. Start command:
-   - `python src/main.py`
-4. Add env vars from `.env.example`.
-5. Add external schedule (cron-job.org) that triggers GitHub Actions workflow (already used) or Render cron equivalent.
+Filters now target structured fields:
 
-### Existing scheduler path (already working)
+- specialization
+- level
+- city
+- country
+- remote_type
+- employment_type
 
-- Keep GitHub workflow dispatch + cron-job.org HTTP trigger.
+## 9) Search Updates
 
-## Local Run
+Search is Postgres-based only (`ilike` over normalized columns + description). No semantic runtime AI.
 
-### Scraper
+## 10) Setup / Deployment
+
+### Scraper env (repo root)
+
+From `.env.example`:
+
+- `TG_API_ID`, `TG_API_HASH`, `SOURCE_CHANNELS`
+- `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`
+- `ENABLE_AI_ENRICHMENT=true`
+- `OPENROUTER_API_KEY`
+- `OPENROUTER_MODEL`
+- `ENRICHMENT_VERSION`
+
+### GitHub Actions secrets
+
+Set the same values in repository secrets for scheduled/manual ingestion runs.
+
+### Frontend env (`web/.env.local` / Vercel)
+
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+
+### Run locally
+
+Scraper:
 
 ```bash
 python3 -m venv .venv
@@ -127,13 +138,10 @@ pip install -r requirements.txt
 python src/main.py
 ```
 
-### Frontend
+Frontend:
 
 ```bash
 cd web
-cp .env.example .env.local
 npm install
 npm run dev
 ```
-
-Open: `http://localhost:3000/jobs`

@@ -6,8 +6,29 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { JobCard } from "@/components/job-card";
 import type { Job } from "@/types/job";
 
-const TAG_OPTIONS = ["", "ux", "ui", "product", "graphic", "motion", "brand", "web", "mobile", "figma", "freelance"];
-const SENIORITY_OPTIONS = ["", "junior", "middle", "senior", "lead", "intern"];
+const SPECIALIZATIONS = [
+  "",
+  "branding",
+  "graphic_design",
+  "product_design",
+  "ux",
+  "ui",
+  "uxui",
+  "motion",
+  "3d",
+  "illustration",
+  "art_direction",
+  "creative_direction",
+  "visual_design",
+  "web_design",
+  "industrial_design",
+  "service_design",
+  "research",
+  "design_ops",
+];
+const LEVELS = ["", "intern", "junior", "middle", "senior", "lead", "head", "director"];
+const REMOTE_TYPES = ["", "remote", "hybrid", "onsite"];
+const EMPLOYMENT_TYPES = ["", "full_time", "part_time", "contract", "freelance", "internship"];
 
 type ApiResponse = { jobs: Job[]; page: number; hasMore: boolean; error?: string };
 
@@ -25,11 +46,17 @@ export function JobsFeedClient() {
   const loadingRef = useRef(false);
 
   const q = searchParams.get("q") || "";
-  const tag = searchParams.get("tag") || "";
-  const remote = searchParams.get("remote") || "";
-  const seniority = searchParams.get("seniority") || "";
+  const specialization = searchParams.get("specialization") || "";
+  const level = searchParams.get("level") || "";
+  const city = searchParams.get("city") || "";
+  const country = searchParams.get("country") || "";
+  const remoteType = searchParams.get("remote_type") || "";
+  const employmentType = searchParams.get("employment_type") || "";
 
-  const key = useMemo(() => JSON.stringify({ q, tag, remote, seniority }), [q, tag, remote, seniority]);
+  const key = useMemo(
+    () => JSON.stringify({ q, specialization, level, city, country, remoteType, employmentType }),
+    [q, specialization, level, city, country, remoteType, employmentType]
+  );
 
   const loadPage = useCallback(
     async (targetPage: number, replace: boolean) => {
@@ -41,17 +68,18 @@ export function JobsFeedClient() {
       try {
         const params = new URLSearchParams();
         if (q) params.set("q", q);
-        if (tag) params.set("tag", tag);
-        if (remote) params.set("remote", remote);
-        if (seniority) params.set("seniority", seniority);
+        if (specialization) params.set("specialization", specialization);
+        if (level) params.set("level", level);
+        if (city) params.set("city", city);
+        if (country) params.set("country", country);
+        if (remoteType) params.set("remote_type", remoteType);
+        if (employmentType) params.set("employment_type", employmentType);
         params.set("page", String(targetPage));
 
         const response = await fetch(`/api/jobs?${params.toString()}`, { cache: "no-store" });
         const data = (await response.json()) as ApiResponse;
 
-        if (!response.ok || data.error) {
-          return;
-        }
+        if (!response.ok || data.error) return;
 
         setJobs((prev) => (replace ? data.jobs : [...prev, ...data.jobs]));
         setPage(data.page);
@@ -61,7 +89,7 @@ export function JobsFeedClient() {
         setLoading(false);
       }
     },
-    [q, tag, remote, seniority]
+    [q, specialization, level, city, country, remoteType, employmentType]
   );
 
   useEffect(() => {
@@ -97,14 +125,20 @@ export function JobsFeedClient() {
 
     const params = new URLSearchParams();
     const fq = String(formData.get("q") || "").trim();
-    const ftag = String(formData.get("tag") || "").trim();
-    const fremote = String(formData.get("remote") || "").trim();
-    const fseniority = String(formData.get("seniority") || "").trim();
+    const fspecialization = String(formData.get("specialization") || "").trim();
+    const flevel = String(formData.get("level") || "").trim();
+    const fcity = String(formData.get("city") || "").trim();
+    const fcountry = String(formData.get("country") || "").trim();
+    const fremoteType = String(formData.get("remote_type") || "").trim();
+    const femploymentType = String(formData.get("employment_type") || "").trim();
 
     if (fq) params.set("q", fq);
-    if (ftag) params.set("tag", ftag);
-    if (fremote) params.set("remote", fremote);
-    if (fseniority) params.set("seniority", fseniority);
+    if (fspecialization) params.set("specialization", fspecialization);
+    if (flevel) params.set("level", flevel);
+    if (fcity) params.set("city", fcity);
+    if (fcountry) params.set("country", fcountry);
+    if (fremoteType) params.set("remote_type", fremoteType);
+    if (femploymentType) params.set("employment_type", femploymentType);
 
     const url = params.toString() ? `${pathname}?${params.toString()}` : pathname;
     router.push(url);
@@ -114,40 +148,59 @@ export function JobsFeedClient() {
     <section className="space-y-6">
       <div className="space-y-1">
         <h1 className="text-2xl font-semibold tracking-tight">Jobs Feed</h1>
-        <p className="text-sm text-soft">Sorted by original publication time.</p>
+        <p className="text-sm text-soft">AI-enriched structured filters. Sorted by original publication time.</p>
       </div>
 
-      <form onSubmit={onSubmit} className="grid gap-3 rounded-lg border border-line bg-white p-4 sm:grid-cols-2 lg:grid-cols-5">
+      <form onSubmit={onSubmit} className="grid gap-3 rounded-lg border border-line bg-white p-4 sm:grid-cols-2 lg:grid-cols-7">
         <input
           type="text"
           name="q"
           defaultValue={q}
-          placeholder="Search by title, company, description"
+          placeholder="Search title/company/description"
           className="w-full rounded-md border border-line px-3 py-2 text-sm outline-none focus:border-ink lg:col-span-2"
         />
 
-        <select name="tag" defaultValue={tag} className="rounded-md border border-line px-3 py-2 text-sm">
-          {TAG_OPTIONS.map((item) => (
-            <option key={item} value={item}>
-              {item ? `tag: ${item}` : "all tags"}
-            </option>
+        <select name="specialization" defaultValue={specialization} className="rounded-md border border-line px-3 py-2 text-sm">
+          {SPECIALIZATIONS.map((item) => (
+            <option key={item} value={item}>{item || "all specializations"}</option>
           ))}
         </select>
 
-        <select name="remote" defaultValue={remote} className="rounded-md border border-line px-3 py-2 text-sm">
-          <option value="">all locations</option>
-          <option value="true">remote only</option>
-        </select>
-
-        <select name="seniority" defaultValue={seniority} className="rounded-md border border-line px-3 py-2 text-sm">
-          {SENIORITY_OPTIONS.map((item) => (
-            <option key={item} value={item}>
-              {item ? `level: ${item}` : "all levels"}
-            </option>
+        <select name="level" defaultValue={level} className="rounded-md border border-line px-3 py-2 text-sm">
+          {LEVELS.map((item) => (
+            <option key={item} value={item}>{item || "all levels"}</option>
           ))}
         </select>
 
-        <div className="sm:col-span-2 lg:col-span-5">
+        <input
+          type="text"
+          name="city"
+          defaultValue={city}
+          placeholder="City"
+          className="rounded-md border border-line px-3 py-2 text-sm"
+        />
+
+        <input
+          type="text"
+          name="country"
+          defaultValue={country}
+          placeholder="Country"
+          className="rounded-md border border-line px-3 py-2 text-sm"
+        />
+
+        <select name="remote_type" defaultValue={remoteType} className="rounded-md border border-line px-3 py-2 text-sm">
+          {REMOTE_TYPES.map((item) => (
+            <option key={item} value={item}>{item || "all remote types"}</option>
+          ))}
+        </select>
+
+        <select name="employment_type" defaultValue={employmentType} className="rounded-md border border-line px-3 py-2 text-sm">
+          {EMPLOYMENT_TYPES.map((item) => (
+            <option key={item} value={item}>{item || "all employment types"}</option>
+          ))}
+        </select>
+
+        <div className="sm:col-span-2 lg:col-span-7">
           <button className="rounded-md border border-ink bg-ink px-4 py-2 text-sm font-medium text-white" type="submit">
             Apply filters
           </button>
@@ -157,12 +210,7 @@ export function JobsFeedClient() {
       <div className="space-y-3">
         {jobs.length === 0 && !loading ? <p className="text-sm text-soft">No jobs found.</p> : null}
         {jobs.map((job) => (
-          <JobCard
-            key={job.id}
-            job={job}
-            isOpen={openId === job.id}
-            onToggle={(id) => setOpenId((prev) => (prev === id ? null : id))}
-          />
+          <JobCard key={job.id} job={job} isOpen={openId === job.id} onToggle={(id) => setOpenId((prev) => (prev === id ? null : id))} />
         ))}
       </div>
 

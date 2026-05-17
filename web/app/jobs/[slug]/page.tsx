@@ -1,34 +1,34 @@
 import { notFound } from "next/navigation";
 
-import { formatRelativeDate } from "@/lib/time";
 import { getJobBySlug } from "@/lib/jobs";
+import { formatRelativeDate } from "@/lib/time";
 
 export const revalidate = 60;
 
 export default async function JobDetailPage({ params }: { params: { slug: string } }) {
   const job = await getJobBySlug(params.slug);
 
-  if (!job) {
-    notFound();
-  }
+  if (!job) notFound();
+
+  const published = job.published_at || job.created_at;
 
   return (
     <article className="space-y-6">
       <header className="space-y-2">
         <h1 className="text-3xl font-semibold tracking-tight">{job.title || "Untitled Vacancy"}</h1>
         <p className="text-soft">
-          {job.company || "Unknown company"} · {job.location || "Location not specified"}
+          {job.company || "Unknown company"}
+          {job.city || job.country ? ` · ${job.city || ""}${job.city && job.country ? ", " : ""}${job.country || ""}` : ""}
         </p>
-        <p className="text-sm text-soft">Published {formatRelativeDate(job.published_at || job.created_at)}</p>
+        <p className="text-sm text-soft">Published {formatRelativeDate(published)}</p>
       </header>
 
       <div className="flex flex-wrap items-center gap-2">
-        {job.remote ? <span className="rounded-full border border-line px-2 py-0.5 text-xs">remote</span> : null}
-        {job.seniority ? <span className="rounded-full border border-line px-2 py-0.5 text-xs">{job.seniority}</span> : null}
-        {(job.tags || []).map((tag) => (
-          <span key={tag} className="rounded-full border border-line px-2 py-0.5 text-xs text-soft">
-            {tag}
-          </span>
+        {job.remote_type ? <span className="rounded-full border border-line px-2 py-0.5 text-xs">{job.remote_type}</span> : null}
+        {job.level ? <span className="rounded-full border border-line px-2 py-0.5 text-xs">{job.level}</span> : null}
+        {job.employment_type ? <span className="rounded-full border border-line px-2 py-0.5 text-xs">{job.employment_type}</span> : null}
+        {(job.specializations || []).map((tag) => (
+          <span key={tag} className="rounded-full border border-line px-2 py-0.5 text-xs text-soft">{tag}</span>
         ))}
       </div>
 
@@ -40,6 +40,11 @@ export default async function JobDetailPage({ params }: { params: { slug: string
       <section className="rounded-lg border border-line bg-white p-5 text-sm">
         <h2 className="mb-3 text-lg font-medium">Metadata</h2>
         <ul className="space-y-2 text-soft">
+          <li>Country: {job.country || "n/a"}</li>
+          <li>City: {job.city || "n/a"}</li>
+          <li>Role type: {job.role_type || "n/a"}</li>
+          <li>Tools: {(job.tools || []).join(", ") || "n/a"}</li>
+          <li>Languages: {(job.language || []).join(", ") || "n/a"}</li>
           <li>Source channel: {job.source_channel}</li>
           <li>
             Source link:{" "}

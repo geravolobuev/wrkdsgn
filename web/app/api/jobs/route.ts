@@ -13,34 +13,50 @@ export async function GET(request: NextRequest) {
   const to = from + PAGE_SIZE - 1;
 
   const q = (searchParams.get("q") || "").trim();
-  const tag = (searchParams.get("tag") || "").trim();
-  const remote = (searchParams.get("remote") || "").trim();
-  const seniority = (searchParams.get("seniority") || "").trim();
+  const specialization = (searchParams.get("specialization") || "").trim();
+  const level = (searchParams.get("level") || "").trim();
+  const city = (searchParams.get("city") || "").trim();
+  const country = (searchParams.get("country") || "").trim();
+  const remoteType = (searchParams.get("remote_type") || "").trim();
+  const employmentType = (searchParams.get("employment_type") || "").trim();
 
   let query = supabase
     .from("vacancies")
     .select(
-      "id,title,company,location,remote,seniority,tags,description,source_channel,source_link,created_at,published_at,slug",
+      "id,title,company,location,description,source_channel,source_link,created_at,published_at,slug,country,city,remote_type,employment_type,level,role_type,specializations,semantic_tags,tools,language,salary_min,salary_max",
       { count: "exact" }
     )
+    .eq("is_job", true)
     .order("published_at", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false })
     .range(from, to);
 
   if (q) {
-    query = query.or(`title.ilike.%${q}%,company.ilike.%${q}%,description.ilike.%${q}%`);
+    query = query.or(`title.ilike.%${q}%,company.ilike.%${q}%,description.ilike.%${q}%,city.ilike.%${q}%,country.ilike.%${q}%`);
   }
 
-  if (tag) {
-    query = query.contains("tags", [tag]);
+  if (specialization) {
+    query = query.contains("specializations", [specialization]);
   }
 
-  if (remote === "true") {
-    query = query.eq("remote", true);
+  if (level) {
+    query = query.eq("level", level);
   }
 
-  if (seniority) {
-    query = query.eq("seniority", seniority);
+  if (city) {
+    query = query.ilike("city", `%${city}%`);
+  }
+
+  if (country) {
+    query = query.ilike("country", `%${country}%`);
+  }
+
+  if (remoteType) {
+    query = query.eq("remote_type", remoteType);
+  }
+
+  if (employmentType) {
+    query = query.eq("employment_type", employmentType);
   }
 
   const { data, error, count } = await query;

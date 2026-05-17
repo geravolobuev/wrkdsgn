@@ -3,42 +3,17 @@
 import { formatRelativeDate } from "@/lib/time";
 import type { Job } from "@/types/job";
 
-function deriveSeniority(job: Job): string | null {
-  if (job.seniority) return job.seniority;
-  const text = `${job.title || ""} ${job.description || ""}`.toLowerCase();
-  if (/(junior|джун)/.test(text)) return "junior";
-  if (/(middle|mid|мидл|мид)/.test(text)) return "middle";
-  if (/(senior|сеньор)/.test(text)) return "senior";
-  if (/(lead|тимлид)/.test(text)) return "lead";
-  if (/(intern|стаж)/.test(text)) return "intern";
-  return null;
-}
-
-function deriveTags(job: Job): string[] {
-  if (job.tags && job.tags.length > 0) return job.tags;
-  const text = `${job.title || ""} ${job.description || ""}`.toLowerCase();
-  const tags: string[] = [];
-  const map: Record<string, RegExp> = {
-    ux: /\bux\b/,
-    ui: /\bui\b/,
-    product: /(product designer|продуктов)/,
-    graphic: /(graphic|графическ)/,
-    motion: /motion/,
-    web: /(\bweb\b|веб)/,
-    mobile: /(mobile|ios|android)/,
-    figma: /figma/,
-    freelance: /(freelance|фриланс)/
-  };
-  for (const [tag, re] of Object.entries(map)) {
-    if (re.test(text)) tags.push(tag);
-  }
-  return tags;
+function salaryLabel(job: Job): string | null {
+  if (job.salary_min === null && job.salary_max === null) return null;
+  if (job.salary_min !== null && job.salary_max !== null) return `${job.salary_min} - ${job.salary_max}`;
+  if (job.salary_min !== null) return `from ${job.salary_min}`;
+  return `up to ${job.salary_max}`;
 }
 
 export function JobCard({
   job,
   isOpen,
-  onToggle
+  onToggle,
 }: {
   job: Job;
   isOpen: boolean;
@@ -46,8 +21,7 @@ export function JobCard({
 }) {
   const excerpt = (job.description || "").slice(0, 180);
   const published = job.published_at || job.created_at;
-  const tags = deriveTags(job);
-  const seniority = deriveSeniority(job);
+  const salary = salaryLabel(job);
 
   return (
     <article className="rounded-lg border border-line bg-white p-4 sm:p-5">
@@ -56,7 +30,8 @@ export function JobCard({
           <div>
             <h3 className="text-lg font-semibold tracking-tight">{job.title || "Untitled Vacancy"}</h3>
             <p className="text-sm text-soft">
-              {job.company || "Unknown company"} · {job.location || "Location not specified"}
+              {job.company || "Unknown company"}
+              {job.city || job.country ? ` · ${job.city || ""}${job.city && job.country ? ", " : ""}${job.country || ""}` : ""}
             </p>
           </div>
           <time className="shrink-0 text-xs text-soft">{formatRelativeDate(published)}</time>
@@ -65,9 +40,10 @@ export function JobCard({
       </button>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        {job.remote ? <span className="rounded-full border border-line px-2 py-0.5 text-xs">remote</span> : null}
-        {seniority ? <span className="rounded-full border border-line px-2 py-0.5 text-xs">{seniority}</span> : null}
-        {tags.slice(0, 5).map((tag) => (
+        {job.remote_type ? <span className="rounded-full border border-line px-2 py-0.5 text-xs">{job.remote_type}</span> : null}
+        {job.level ? <span className="rounded-full border border-line px-2 py-0.5 text-xs">{job.level}</span> : null}
+        {job.employment_type ? <span className="rounded-full border border-line px-2 py-0.5 text-xs">{job.employment_type}</span> : null}
+        {(job.specializations || []).slice(0, 4).map((tag) => (
           <span key={tag} className="rounded-full border border-line px-2 py-0.5 text-xs text-soft">
             {tag}
           </span>
@@ -77,14 +53,26 @@ export function JobCard({
       {isOpen ? (
         <div className="mt-4 space-y-3 border-t border-line pt-4">
           <p className="whitespace-pre-wrap text-sm leading-6">{job.description || "No description"}</p>
-          <div className="flex flex-wrap gap-4 text-sm text-soft">
-            <span>Source: {job.source_channel}</span>
-            {job.source_link ? (
-              <a className="link" href={job.source_link} rel="noreferrer" target="_blank">
-                Open original post
-              </a>
-            ) : null}
+          <div className="grid gap-2 text-sm text-soft sm:grid-cols-2">
+            <span>Country: {job.country || "n/a"}</span>
+            <span>City: {job.city || "n/a"}</span>
+            <span>Role type: {job.role_type || "n/a"}</span>
+            <span>Salary: {salary || "n/a"}</span>
           </div>
+          {(job.semantic_tags || []).length > 0 ? (
+            <div className="flex flex-wrap gap-2">
+              {(job.semantic_tags || []).map((tag) => (
+                <span key={tag} className="rounded-full border border-line px-2 py-0.5 text-xs text-soft">
+                  {tag}
+                </span>
+              ))}
+            </div>
+          ) : null}
+          {job.source_link ? (
+            <a className="link text-sm" href={job.source_link} rel="noreferrer" target="_blank">
+              Open original post
+            </a>
+          ) : null}
         </div>
       ) : null}
     </article>

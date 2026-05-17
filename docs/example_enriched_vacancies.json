@@ -1,0 +1,32 @@
+[
+  {
+    "is_job": true,
+    "level": "lead",
+    "specializations": ["branding", "art_direction", "product_design"],
+    "city": "Berlin",
+    "country": "Germany",
+    "remote_type": "hybrid",
+    "employment_type": "full_time",
+    "role_type": "manager",
+    "semantic_tags": ["design_system", "team_leadership"],
+    "tools": ["figma", "miro"],
+    "language": ["english"],
+    "salary_min": 65000,
+    "salary_max": 85000
+  },
+  {
+    "is_job": true,
+    "level": "middle",
+    "specializations": ["ux", "ui", "research"],
+    "city": "Warsaw",
+    "country": "Poland",
+    "remote_type": "remote",
+    "employment_type": "contract",
+    "role_type": "individual_contributor",
+    "semantic_tags": ["b2b", "saas"],
+    "tools": ["figma", "notion"],
+    "language": ["english", "polish"],
+    "salary_min": 3000,
+    "salary_max": 4500
+  }
+]
