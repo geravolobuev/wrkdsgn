@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import re
 
 import requests
@@ -56,6 +57,9 @@ def split_jobs(text: str) -> list[dict]:
     if len(deterministic) > 1:
         return deterministic
 
+    if os.getenv("ENABLE_AI_ENRICHMENT", "true").lower() != "true":
+        return deterministic
+
     api_key = __import__("os").getenv("OPENROUTER_API_KEY", "").strip()
     if not api_key:
         return deterministic
@@ -84,7 +88,9 @@ def split_jobs(text: str) -> list[dict]:
             response = requests.post(OPENROUTER_URL, json=payload, headers=headers, timeout=timeout_sec)
             if response.status_code >= 400:
                 continue
-            content = response.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+            content = response.json().get("choices", [{}])[0].get("message", {}).get("content")
+            if not isinstance(content, str) or not content.strip():
+                continue
             parsed = json.loads(content)
             jobs = parsed.get("jobs")
             if isinstance(jobs, list):

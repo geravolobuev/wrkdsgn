@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 
 import requests
 
@@ -39,6 +40,9 @@ def _heuristic_role(text: str) -> str:
 
 
 def extract_canonical_role(text: str) -> str:
+    if os.getenv("ENABLE_AI_ENRICHMENT", "true").lower() != "true":
+        return _heuristic_role(text)
+
     api_key = __import__("os").getenv("OPENROUTER_API_KEY", "").strip()
     if not api_key:
         return _heuristic_role(text)
@@ -67,7 +71,9 @@ def extract_canonical_role(text: str) -> str:
             response = requests.post(OPENROUTER_URL, json=payload, headers=headers, timeout=timeout_sec)
             if response.status_code >= 400:
                 continue
-            content = response.json().get("choices", [{}])[0].get("message", {}).get("content", "")
+            content = response.json().get("choices", [{}])[0].get("message", {}).get("content")
+            if not isinstance(content, str) or not content.strip():
+                continue
             parsed = json.loads(content)
             value = parsed.get("canonical_title")
             if isinstance(value, str) and value.strip():
