@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import logging
 import os
 import re
 import sys
@@ -7,16 +8,22 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
-from postgrest.exceptions import APIError
 from supabase import Client, create_client
 from telethon import TelegramClient
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from parser.deterministic_prefilter import run_prefilter
-from src.enrichment.openrouter_client import EnrichmentResult, enrich_with_openrouter
+from parser.ad_classifier import is_ad_or_funnel
+from parser.job_classifier import classify_job_or_ad_by_score, job_score
+from parser.job_splitter import split_jobs
+from parser.location_extractor import extract_location
+from parser.openrouter_client import classify_uncertain_job_ad, enrich_vacancy_with_ai
+from parser.role_extractor import extract_canonical_role
+from parser.taxonomy_mapper import map_role_to_taxonomy
 
 load_dotenv()
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+logger = logging.getLogger(__name__)
 
 TG_API_ID = int(os.getenv("TG_API_ID", "0"))
 TG_API_HASH = os.getenv("TG_API_HASH", "")
@@ -27,7 +34,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 TELETHON_SESSION_NAME = os.getenv("TELETHON_SESSION_NAME", "telegram_session")
 FETCH_LIMIT = int(os.getenv("FETCH_LIMIT", "30"))
-ENRICHMENT_VERSION = os.getenv("ENRICHMENT_VERSION", "v1")
+ENRICHMENT_VERSION = os.getenv("ENRICHMENT_VERSION", "v2_strict")
 
 
 def validate_env() -> None:
@@ -104,36 +111,6 @@ def infer_seniority(text: str) -> str | None:
     return None
 
 
-def infer_remote_type(text: str) -> str | None:
-    low = text.lower()
-    if any(token in low for token in ["remote", "удален", "удалён"]):
-        return "remote"
-    if any(token in low for token in ["hybrid", "гибрид"]):
-        return "hybrid"
-    if any(token in low for token in ["onsite", "офис"]):
-        return "onsite"
-    return None
-
-
-def infer_tags(text: str) -> list[str]:
-    low = text.lower()
-    tags: list[str] = []
-    dictionary = {
-        "ux": ["ux"],
-        "ui": ["ui"],
-        "product_design": ["product designer", "продукт"],
-        "graphic_design": ["graphic", "графическ"],
-        "motion": ["motion"],
-        "branding": ["brand", "branding", "бренд"],
-        "web_design": ["web", "веб"],
-        "freelance": ["freelance", "фриланс"],
-    }
-    for tag, needles in dictionary.items():
-        if any(n in low for n in needles):
-            tags.append(tag)
-    return tags
-
-
 def infer_employment_type(text: str) -> str | None:
     low = text.lower()
     if any(x in low for x in ["full-time", "full time", "полная занятость"]):
@@ -159,8 +136,8 @@ def extract_fields(text: str) -> dict:
 
     for line in lines:
         low = line.lower()
-        if company is None and ("компан" in low or "company" in low):
-            company = line
+        if company is None and ("компан" in low or "company" in low or " в " in low):
+            company = line[:120]
         if salary is None and ("зарп" in low or "$" in line or "₽" in line or "usd" in low or "eur" in low):
             salary = line
         if location is None and (
@@ -170,21 +147,18 @@ def extract_fields(text: str) -> dict:
             or "офис" in low
             or "location" in low
             or "city" in low
+            or "hybrid" in low
         ):
             location = line
 
-    description = text.strip()
-
     return {
-        "title": title,
+        "raw_title": title,
         "company": company,
         "salary": salary,
         "location": location,
-        "description": description,
-        "level": infer_seniority(description),
-        "remote_type": infer_remote_type(description),
-        "specializations": infer_tags(description),
-        "employment_type": infer_employment_type(description),
+        "description": text.strip(),
+        "level": infer_seniority(text),
+        "employment_type": infer_employment_type(text),
     }
 
 
@@ -210,19 +184,6 @@ def build_source_url(channel: str, message_id: int) -> str | None:
     return None
 
 
-def get_existing_by_source(supabase: Client, source_channel: str, message_id: int) -> dict | None:
-    res = (
-        supabase.table("vacancies")
-        .select("*")
-        .eq("source_channel", source_channel)
-        .eq("source_message_id", message_id)
-        .limit(1)
-        .execute()
-    )
-    rows = res.data or []
-    return rows[0] if rows else None
-
-
 def get_existing_by_hash(supabase: Client, content_hash: str) -> dict | None:
     res = supabase.table("vacancies").select("*").eq("content_hash", content_hash).limit(1).execute()
     rows = res.data or []
@@ -239,54 +200,23 @@ def should_skip_enrichment(existing: dict | None, content_hash: str) -> bool:
     )
 
 
-def merge_metadata(base: dict, ai: EnrichmentResult | None) -> dict:
-    salary_min, salary_max = parse_salary_range(base.get("salary"))
+def _final_stage_decision(text: str) -> tuple[bool, str, int]:
+    score = job_score(text)
+    scored = classify_job_or_ad_by_score(text)
 
-    merged = {
-        "country": None,
-        "city": None,
-        "remote_type": base.get("remote_type"),
-        "employment_type": base.get("employment_type"),
-        "level": base.get("level"),
-        "role_type": None,
-        "specializations": base.get("specializations") or [],
-        "semantic_tags": [],
-        "tools": [],
-        "language": [],
-        "salary_min": salary_min,
-        "salary_max": salary_max,
-        "is_job": True,
-    }
+    if scored == "JOB":
+        return True, "score_job", score
+    if scored == "AD":
+        return False, "score_ad", score
 
-    if ai is None:
-        return merged
+    ai_decision = classify_uncertain_job_ad(text)
+    if ai_decision == "JOB":
+        return True, "ai_job", score
+    if ai_decision == "AD":
+        return False, "ai_ad", score
 
-    merged["is_job"] = ai.is_job
-    merged["country"] = ai.country
-    merged["city"] = ai.city
-    merged["remote_type"] = ai.remote_type or merged["remote_type"]
-    merged["employment_type"] = ai.employment_type or merged["employment_type"]
-    merged["level"] = ai.level or merged["level"]
-    merged["role_type"] = ai.role_type
-    merged["specializations"] = ai.specializations or merged["specializations"]
-    merged["semantic_tags"] = ai.semantic_tags
-    merged["tools"] = ai.tools
-    merged["language"] = ai.language
-    merged["salary_min"] = ai.salary_min if ai.salary_min is not None else merged["salary_min"]
-    merged["salary_max"] = ai.salary_max if ai.salary_max is not None else merged["salary_max"]
-    return merged
-
-
-def is_duplicate_content_hash_error(exc: Exception) -> bool:
-    if not isinstance(exc, APIError):
-        return False
-    payload = getattr(exc, "args", [None])[0]
-    if not isinstance(payload, dict):
-        return False
-    # Be tolerant to payload format differences across postgrest client versions.
-    if payload.get("code") != "23505":
-        return False
-    return payload.get("code") == "23505"
+    # deterministic fallback when AI uncertain/unavailable
+    return score >= 1, "fallback_score", score
 
 
 async def run() -> None:
@@ -303,15 +233,14 @@ async def run() -> None:
             await client.sign_in(TG_PHONE, code)
 
         total_processed = 0
-        total_prefilter_rejected = 0
-        total_ai_rejected = 0
+        total_rejected = 0
         total_saved = 0
 
         for source_channel in source_channels:
             try:
                 source_entity = await client.get_entity(source_channel)
             except Exception as exc:
-                print(f"Skip channel {source_channel}: cannot resolve ({exc})")
+                logger.warning("Skip channel %s: cannot resolve (%s)", source_channel, exc)
                 continue
 
             messages = []
@@ -324,90 +253,111 @@ async def run() -> None:
 
             for msg in messages:
                 raw_text = msg.message.strip()
-                content_hash = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
 
-                pre = run_prefilter(raw_text)
-                print(
-                    f"Prefilter channel={source_channel} message_id={msg.id} score={pre['score']} "
-                    f"accepted={pre['accepted']} positive={pre['matched_positive']} negative={pre['matched_negative']}"
+                is_job, decision_source, score = _final_stage_decision(raw_text)
+                logger.info(
+                    "Classify channel=%s message_id=%s score=%s decision=%s source=%s",
+                    source_channel,
+                    msg.id,
+                    score,
+                    "JOB" if is_job else "AD",
+                    decision_source,
                 )
 
-                if not pre["accepted"]:
-                    total_prefilter_rejected += 1
+                if not is_job or is_ad_or_funnel(raw_text):
+                    total_rejected += 1
                     continue
 
-                existing = get_existing_by_source(supabase, source_channel, msg.id)
-                if should_skip_enrichment(existing, content_hash):
-                    continue
+                split_items = split_jobs(raw_text)
 
-                duplicate = get_existing_by_hash(supabase, content_hash)
-                if duplicate and not existing:
-                    if should_skip_enrichment(duplicate, content_hash):
+                for part_idx, item in enumerate(split_items):
+                    job_text = (item.get("raw_text") or "").strip()
+                    if not job_text:
                         continue
 
-                base = extract_fields(raw_text)
-                ai = enrich_with_openrouter(raw_text)
-                metadata = merge_metadata(base, ai)
+                    content_hash = hashlib.sha256(
+                        f"{source_channel}:{msg.id}:{part_idx}:{job_text}".encode("utf-8")
+                    ).hexdigest()
 
-                if not metadata["is_job"]:
-                    total_ai_rejected += 1
-                    continue
+                    existing = get_existing_by_hash(supabase, content_hash)
+                    if should_skip_enrichment(existing, content_hash):
+                        continue
 
-                source_link = build_source_url(source_channel, msg.id)
-                slug = slugify(f"{base['title'] or 'job'}-{source_channel.strip('@')}-{msg.id}")
+                    base = extract_fields(job_text)
+                    canonical_title = extract_canonical_role(job_text)
+                    specializations = map_role_to_taxonomy(canonical_title)
 
-                row = {
-                    "source_channel": source_channel,
-                    "source_message_id": msg.id,
-                    "published_at": to_iso(msg.date) or datetime.now(timezone.utc).isoformat(),
-                    "raw_text": raw_text,
-                    "title": base["title"],
-                    "company": base["company"],
-                    "location": base["location"],
-                    "description": base["description"],
-                    "source_link": source_link,
-                    "source_url": source_link,
-                    "slug": slug,
-                    "content_hash": content_hash,
-                    "is_job": metadata["is_job"],
-                    "country": metadata["country"],
-                    "city": metadata["city"],
-                    "remote_type": metadata["remote_type"],
-                    "employment_type": metadata["employment_type"],
-                    "level": metadata["level"],
-                    "role_type": metadata["role_type"],
-                    "specializations": metadata["specializations"],
-                    "semantic_tags": metadata["semantic_tags"],
-                    "tools": metadata["tools"],
-                    "language": metadata["language"],
-                    "salary_min": metadata["salary_min"],
-                    "salary_max": metadata["salary_max"],
-                    "enriched_at": datetime.now(timezone.utc).isoformat(),
-                    "enrichment_version": ENRICHMENT_VERSION,
-                    "enrichment_hash": content_hash,
-                }
+                    # Strict taxonomy gate: keep only jobs mapped to controlled vocabulary
+                    if not specializations:
+                        total_rejected += 1
+                        continue
 
-                if existing:
-                    supabase.table("vacancies").update(row).eq("id", existing["id"]).execute()
-                else:
-                    # Conflict-safe insert: ignore duplicate content_hash at DB level.
+                    loc = extract_location(job_text)
+                    ai = enrich_vacancy_with_ai(job_text)
+
+                    if ai is not None and ai.get("is_job") is False:
+                        total_rejected += 1
+                        continue
+
+                    salary_min, salary_max = parse_salary_range(base.get("salary"))
+                    if ai is not None:
+                        salary_min = ai.get("salary_min") if ai.get("salary_min") is not None else salary_min
+                        salary_max = ai.get("salary_max") if ai.get("salary_max") is not None else salary_max
+
+                    source_link = build_source_url(source_channel, msg.id)
+                    slug = slugify(f"{canonical_title}-{source_channel.strip('@')}-{msg.id}-{part_idx}")
+
+                    row = {
+                        "source_channel": source_channel,
+                        "source_message_id": msg.id,
+                        "published_at": to_iso(msg.date) or datetime.now(timezone.utc).isoformat(),
+                        "raw_text": job_text,
+                        "raw_title": base["raw_title"],
+                        "canonical_title": canonical_title,
+                        "title": canonical_title,
+                        "company": base["company"],
+                        "location": base["location"],
+                        "description": base["description"],
+                        "source_link": source_link,
+                        "source_url": source_link,
+                        "slug": slug,
+                        "content_hash": content_hash,
+                        "is_job": True,
+                        "country": loc["country"] or (ai.get("country") if ai else None),
+                        "city": loc["city"] or (ai.get("city") if ai else None),
+                        "remote_type": loc["remote_type"] or (ai.get("remote_type") if ai else None),
+                        "employment_type": (ai.get("employment_type") if ai else None) or base["employment_type"],
+                        "level": (ai.get("level") if ai else None) or base["level"],
+                        "role_type": ai.get("role_type") if ai else None,
+                        "specializations": specializations,
+                        "semantic_tags": ai.get("semantic_tags") if ai else [],
+                        "tools": ai.get("tools") if ai else [],
+                        "language": ai.get("language") if ai else [],
+                        "salary_min": salary_min,
+                        "salary_max": salary_max,
+                        "enriched_at": datetime.now(timezone.utc).isoformat(),
+                        "enrichment_version": ENRICHMENT_VERSION,
+                        "enrichment_hash": content_hash,
+                    }
+
                     supabase.table("vacancies").upsert(
                         row,
                         on_conflict="content_hash",
                         ignore_duplicates=True,
                     ).execute()
 
-                channel_saved += 1
-                total_saved += 1
+                    channel_saved += 1
+                    total_saved += 1
 
             total_processed += len(messages)
-            print(
-                f"Channel summary {source_channel}: processed={len(messages)} saved={channel_saved}"
-            )
+            logger.info("Channel summary %s: processed=%s saved=%s", source_channel, len(messages), channel_saved)
 
-        print(
-            f"Total summary: channels={len(source_channels)} processed={total_processed} "
-            f"prefilter_rejected={total_prefilter_rejected} ai_rejected={total_ai_rejected} saved={total_saved}"
+        logger.info(
+            "Total summary: channels=%s processed=%s rejected=%s saved=%s",
+            len(source_channels),
+            total_processed,
+            total_rejected,
+            total_saved,
         )
 
 
