@@ -192,7 +192,7 @@ async def run() -> None:
                 source_link = build_source_url(source_channel, msg.id)
                 raw_title = extract_raw_title(raw_text)
                 salary_min, salary_max = extract_salary_range(raw_text)
-                slug = slugify(f"{raw_title or 'job'}-{source_channel.strip('@')}-{msg.id}")
+                slug = slugify(f"{raw_title or 'job'}-{source_channel.strip('@')}-{msg.id}-{content_hash[:8]}")
 
                 raw_row = {
                     "source_channel": source_channel,
