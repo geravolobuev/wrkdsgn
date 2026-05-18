@@ -79,6 +79,8 @@ def _validate_payload(parsed: Any) -> dict[str, Any] | None:
         return None
 
     required = {
+        "is_ad",
+        "is_relevant",
         "canonical_title",
         "display_title",
         "seniority",
@@ -97,10 +99,19 @@ def _validate_payload(parsed: Any) -> dict[str, Any] | None:
         return None
 
     allowed_titles = {
-        "Product Designer", "Graphic Designer", "Brand Designer", "Motion Designer", "3D Designer",
-        "UX/UI Designer", "Web Designer", "Art Director", "Creative Director", "Design Director",
-        "Illustrator", "Type Designer", "Design Researcher", "Design Manager",
-        "Content Creator", "Content Writer", "Editor", "SMM Manager", "Copywriter",
+        "Graphic Designer",
+        "Brand Designer",
+        "Branding specialist",
+        "Motion Designer",
+        "3D Designer",
+        "Web Designer",
+        "Art Director",
+        "Creative Director",
+        "Design Director",
+        "Illustrator",
+        "Type Designer",
+        "Design Manager",
+        "UI Designer",
     }
     allowed_seniority = {"Intern", "Junior", "Middle", "Senior", "Lead", "Head"}
     allowed_employment = {"Full-time", "Part-time", "Project"}
@@ -112,6 +123,8 @@ def _validate_payload(parsed: Any) -> dict[str, Any] | None:
     allowed_company_type = {"startup", "corporation", "agency"}
 
     return {
+        "is_ad": bool(parsed.get("is_ad")) if isinstance(parsed.get("is_ad"), bool) else None,
+        "is_relevant": bool(parsed.get("is_relevant")) if isinstance(parsed.get("is_relevant"), bool) else None,
         "canonical_title": _safe_enum(parsed.get("canonical_title"), allowed_titles),
         "display_title": _safe_text(parsed.get("display_title"), 60),
         "seniority": _safe_enum(parsed.get("seniority"), allowed_seniority),

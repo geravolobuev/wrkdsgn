@@ -13,8 +13,6 @@ from telethon import TelegramClient
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from job_parser.ad_classifier import is_ad_or_funnel
-from job_parser.job_classifier import classify_job_or_ad_by_score, job_score
 from job_parser.openrouter_client import enrich_vacancy_with_ai
 
 load_dotenv()
@@ -141,34 +139,6 @@ def get_existing_by_hash(supabase: Client, content_hash: str) -> dict | None:
     return rows[0] if rows else None
 
 
-def deterministic_filter(text: str) -> tuple[bool, str, int]:
-    score = job_score(text)
-    decision = classify_job_or_ad_by_score(text)
-    normalized = text.lower()
-
-    if is_ad_or_funnel(text):
-        return False, "ad_or_funnel", score
-
-    if decision == "AD":
-        return False, "score_ad", score
-
-    if decision == "UNCERTAIN":
-        # Keep non-AI filtering strict, but rescue clear internship/job-intent cases.
-        uncertain_positive = [
-            "стаж",
-            "intern",
-            "портфолио",
-            "резюме",
-            "удален",
-            "удалён",
-        ]
-        if any(marker in normalized for marker in uncertain_positive):
-            return True, "score_uncertain_but_job_signal", score
-        return False, "score_uncertain", score
-
-    return True, "score_job", score
-
-
 async def run() -> None:
     validate_env()
     supabase = make_supabase()
@@ -236,48 +206,52 @@ async def run() -> None:
                 if should_skip_enrichment(existing, content_hash):
                     continue
 
-                # 2) deterministic filter (NO AI)
-                accepted, reason, score = deterministic_filter(raw_text)
-                logger.info(
-                    "Filter channel=%s message_id=%s score=%s accepted=%s reason=%s",
-                    source_channel,
-                    msg.id,
-                    score,
-                    accepted,
-                    reason,
-                )
-
-                if not accepted:
-                    total_filtered_out += 1
-                    supabase.table("vacancies").update(
-                        {
-                            "is_job": False,
-                            "filter_status": "rejected",
-                            "filter_reason": reason,
-                            "pipeline_stage": "filtered_out",
-                        }
-                    ).eq("content_hash", content_hash).execute()
-                    continue
-
-                # 3) AI enrichment only for filtered valid jobs
+                # 2) AI-only filtering + enrichment (single prompt)
                 ai = await asyncio.to_thread(enrich_vacancy_with_ai, raw_text)
                 if ai is None:
                     # no blocking failures
                     supabase.table("vacancies").update(
                         {
-                            "is_job": True,
-                            "filter_status": "accepted",
-                            "filter_reason": reason,
+                            "is_job": None,
+                            "filter_status": "ai_failed",
+                            "filter_reason": "ai_failed",
                             "pipeline_stage": "ai_failed",
                         }
                     ).eq("content_hash", content_hash).execute()
                     continue
 
-                # 4) store enriched structured result together with raw row
+                is_ad = bool(ai.get("is_ad")) if ai.get("is_ad") is not None else False
+                is_relevant = bool(ai.get("is_relevant")) if ai.get("is_relevant") is not None else False
+                is_job = (not is_ad) and is_relevant
+                logger.info(
+                    "AI filter channel=%s message_id=%s is_ad=%s is_relevant=%s is_job=%s",
+                    source_channel,
+                    msg.id,
+                    is_ad,
+                    is_relevant,
+                    is_job,
+                )
+
+                if not is_job:
+                    total_filtered_out += 1
+                    supabase.table("vacancies").update(
+                        {
+                            "is_job": False,
+                            "filter_status": "rejected",
+                            "filter_reason": "ai_not_relevant_or_ad",
+                            "pipeline_stage": "filtered_out",
+                            "enriched_at": datetime.now(timezone.utc).isoformat(),
+                            "enrichment_version": ENRICHMENT_VERSION,
+                            "enrichment_hash": content_hash,
+                        }
+                    ).eq("content_hash", content_hash).execute()
+                    continue
+
+                # 3) store enriched structured result together with raw row
                 enriched_row = {
                     "is_job": True,
                     "filter_status": "accepted",
-                    "filter_reason": reason,
+                    "filter_reason": "ai_relevant",
                     "pipeline_stage": "enriched",
                     "canonical_title": ai.get("canonical_title"),
                     "display_title": ai.get("display_title"),
