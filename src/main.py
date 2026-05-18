@@ -220,14 +220,16 @@ async def run() -> None:
                     ).eq("content_hash", content_hash).execute()
                     continue
 
-                is_ad = bool(ai.get("is_ad")) if ai.get("is_ad") is not None else False
-                is_relevant = bool(ai.get("is_relevant")) if ai.get("is_relevant") is not None else False
-                is_job = (not is_ad) and is_relevant
+                is_ad = bool(ai.get("is_ad"))
+                is_job_post = bool(ai.get("is_job_post"))
+                is_relevant = bool(ai.get("is_relevant"))
+                is_job = (not is_ad) and is_job_post and is_relevant
                 logger.info(
-                    "AI filter channel=%s message_id=%s is_ad=%s is_relevant=%s is_job=%s",
+                    "AI filter channel=%s message_id=%s is_ad=%s is_job_post=%s is_relevant=%s is_job=%s",
                     source_channel,
                     msg.id,
                     is_ad,
+                    is_job_post,
                     is_relevant,
                     is_job,
                 )
@@ -238,7 +240,7 @@ async def run() -> None:
                         {
                             "is_job": False,
                             "filter_status": "rejected",
-                            "filter_reason": "ai_not_relevant_or_ad",
+                            "filter_reason": ai.get("reason_short") or "ai_not_relevant_or_ad",
                             "pipeline_stage": "filtered_out",
                             "enriched_at": datetime.now(timezone.utc).isoformat(),
                             "enrichment_version": ENRICHMENT_VERSION,
@@ -253,20 +255,13 @@ async def run() -> None:
                     "filter_status": "accepted",
                     "filter_reason": "ai_relevant",
                     "pipeline_stage": "enriched",
-                    "canonical_title": ai.get("canonical_title"),
-                    "display_title": ai.get("display_title"),
-                    "seniority": ai.get("seniority"),
+                    "canonical_title": ai.get("role"),
+                    "display_title": ai.get("role"),
+                    "seniority": ai.get("grade"),
                     "employment_type": ai.get("employment_type"),
                     "work_format": ai.get("work_format"),
-                    "country": ai.get("country"),
-                    "city": ai.get("city"),
-                    "system_tags": ai.get("system_tags") or [],
-                    "ai_keywords": ai.get("ai_keywords") or [],
-                    "industry": ai.get("industry"),
-                    "company_type": ai.get("company_type"),
-                    "company_name": ai.get("company_name"),
-                    "confidence_score": ai.get("confidence_score"),
-                    "title": ai.get("display_title") or ai.get("canonical_title") or raw_title,
+                    "filter_reason": ai.get("reason_short") or "ai_relevant",
+                    "title": ai.get("role") or raw_title,
                     "enriched_at": datetime.now(timezone.utc).isoformat(),
                     "enrichment_version": ENRICHMENT_VERSION,
                     "enrichment_hash": content_hash,

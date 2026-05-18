@@ -16,7 +16,6 @@ MODEL_FALLBACK_CHAIN = [
 OPTIONAL_GENERIC_FALLBACK = "openrouter/free"
 
 logger = logging.getLogger(__name__)
-
 DEFAULT_PROMPT_PATH = Path(__file__).resolve().parents[1] / "job-enrichment.prompt.txt"
 
 
@@ -49,59 +48,34 @@ def _safe_enum(value: Any, allowed: set[str]) -> str | None:
     return val if val in allowed else None
 
 
-def _safe_array(values: Any) -> list[str]:
-    if not isinstance(values, list):
-        return []
-    out: list[str] = []
-    for item in values:
-        if isinstance(item, str):
-            clean = item.strip()
-            if clean and clean not in out:
-                out.append(clean[:64])
-    return out[:10]
-
-
-def _safe_confidence(value: Any) -> float | None:
-    if isinstance(value, bool):
-        return None
-    if isinstance(value, (int, float)):
-        v = float(value)
-        if v < 0:
-            return 0.0
-        if v > 1:
-            return 1.0
-        return round(v, 3)
-    return None
-
-
 def _validate_payload(parsed: Any) -> dict[str, Any] | None:
     if not isinstance(parsed, dict):
         return None
 
     required = {
         "is_ad",
+        "is_job_post",
         "is_relevant",
-        "canonical_title",
-        "display_title",
-        "seniority",
+        "role",
+        "grade",
         "employment_type",
         "work_format",
-        "country",
-        "city",
-        "system_tags",
-        "ai_keywords",
-        "industry",
-        "company_type",
-        "company_name",
-        "confidence_score",
+        "reason_short",
     }
     if not required.issubset(parsed.keys()):
         return None
 
-    allowed_titles = {
+    if not isinstance(parsed.get("is_ad"), bool):
+        return None
+    if not isinstance(parsed.get("is_job_post"), bool):
+        return None
+    if not isinstance(parsed.get("is_relevant"), bool):
+        return None
+
+    allowed_roles = {
         "Graphic Designer",
         "Brand Designer",
-        "Branding specialist",
+        "Branding Specialist",
         "Motion Designer",
         "3D Designer",
         "Web Designer",
@@ -113,31 +87,29 @@ def _validate_payload(parsed: Any) -> dict[str, Any] | None:
         "Design Manager",
         "UI Designer",
     }
-    allowed_seniority = {"Intern", "Junior", "Middle", "Senior", "Lead", "Head"}
-    allowed_employment = {"Full-time", "Part-time", "Project"}
-    allowed_work = {"Remote", "Hybrid", "Onsite"}
-    allowed_industry = {
-        "fintech", "saas", "ai", "fashion", "beauty", "gaming", "crypto", "ecommerce",
-        "media", "telecom", "education", "healthcare", "music", "sports",
-    }
-    allowed_company_type = {"startup", "corporation", "agency"}
+    allowed_grades = {"Junior", "Middle", "Senior", "Lead", "Head / Director", "Unknown"}
+    allowed_employment = {"Full-time", "Part-time", "Contract", "Freelance", "Internship", "Unknown"}
+    allowed_work = {"Remote", "Hybrid", "On-site", "Unknown"}
+
+    role = _safe_enum(parsed.get("role"), allowed_roles)
+    grade = _safe_enum(parsed.get("grade"), allowed_grades)
+    employment_type = _safe_enum(parsed.get("employment_type"), allowed_employment)
+    work_format = _safe_enum(parsed.get("work_format"), allowed_work)
+    reason_short = _safe_text(parsed.get("reason_short"), 200)
+
+    # For rejected posts role/grade may be null by prompt rules.
+    if parsed["is_relevant"] and role is None:
+        return None
 
     return {
-        "is_ad": bool(parsed.get("is_ad")) if isinstance(parsed.get("is_ad"), bool) else None,
-        "is_relevant": bool(parsed.get("is_relevant")) if isinstance(parsed.get("is_relevant"), bool) else None,
-        "canonical_title": _safe_enum(parsed.get("canonical_title"), allowed_titles),
-        "display_title": _safe_text(parsed.get("display_title"), 60),
-        "seniority": _safe_enum(parsed.get("seniority"), allowed_seniority),
-        "employment_type": _safe_enum(parsed.get("employment_type"), allowed_employment),
-        "work_format": _safe_enum(parsed.get("work_format"), allowed_work),
-        "country": _safe_text(parsed.get("country"), 80),
-        "city": _safe_text(parsed.get("city"), 80),
-        "system_tags": _safe_array(parsed.get("system_tags")),
-        "ai_keywords": _safe_array(parsed.get("ai_keywords")),
-        "industry": _safe_enum(parsed.get("industry"), allowed_industry),
-        "company_type": _safe_enum(parsed.get("company_type"), allowed_company_type),
-        "company_name": _safe_text(parsed.get("company_name"), 120),
-        "confidence_score": _safe_confidence(parsed.get("confidence_score")),
+        "is_ad": parsed["is_ad"],
+        "is_job_post": parsed["is_job_post"],
+        "is_relevant": parsed["is_relevant"],
+        "role": role,
+        "grade": grade,
+        "employment_type": employment_type,
+        "work_format": work_format,
+        "reason_short": reason_short or "no_reason",
     }
 
 
@@ -172,7 +144,7 @@ def enrich_vacancy_with_ai(raw_text: str) -> dict[str, Any] | None:
                 payload = {
                     "model": model,
                     "temperature": 0,
-                    "max_tokens": 420,
+                    "max_tokens": 240,
                     "messages": [
                         {"role": "system", "content": "Return strict JSON only."},
                         {"role": "user", "content": prompt},

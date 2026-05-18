@@ -1,4 +1,4 @@
-export type Seniority = "Intern" | "Junior" | "Middle" | "Senior" | "Lead" | "Head" | null;
+export type Seniority = "Junior" | "Middle" | "Senior" | "Lead" | "Head / Director" | "Unknown" | null;
 
 export interface Job {
   id: number;
@@ -6,8 +6,6 @@ export interface Job {
   canonical_title: string | null;
   display_title: string | null;
   company: string | null;
-  company_name: string | null;
-  company_type: string | null;
   location: string | null;
   description: string | null;
   source_channel: string;
@@ -18,13 +16,9 @@ export interface Job {
 
   country: string | null;
   city: string | null;
-  work_format: "Remote" | "Hybrid" | "Onsite" | null;
-  employment_type: "Full-time" | "Part-time" | "Project" | null;
+  work_format: "Remote" | "Hybrid" | "On-site" | "Unknown" | null;
+  employment_type: "Full-time" | "Part-time" | "Contract" | "Freelance" | "Internship" | "Unknown" | null;
   seniority: Seniority;
-  system_tags: string[] | null;
-  ai_keywords: string[] | null;
-  industry: string | null;
-  confidence_score: number | null;
   salary_min: number | null;
   salary_max: number | null;
 }

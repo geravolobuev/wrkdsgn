@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
   let query = supabase
     .from("vacancies")
     .select(
-      "id,title,canonical_title,display_title,company,company_name,company_type,location,description,source_channel,source_link,created_at,published_at,slug,country,city,work_format,employment_type,seniority,system_tags,ai_keywords,industry,confidence_score,salary_min,salary_max",
+      "id,title,canonical_title,display_title,company,location,description,source_channel,source_link,created_at,published_at,slug,country,city,work_format,employment_type,seniority,salary_min,salary_max",
       { count: "exact" }
     )
     .eq("is_job", true)

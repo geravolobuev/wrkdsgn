@@ -30,7 +30,7 @@ export function JobCard({
           <div>
             <h3 className="text-lg font-semibold tracking-tight">{job.display_title || job.canonical_title || job.title || "Untitled Vacancy"}</h3>
             <p className="text-sm text-soft">
-              {job.company_name || job.company || "Unknown company"}
+              {job.company || "Unknown company"}
               {job.city || job.country ? ` · ${job.city || ""}${job.city && job.country ? ", " : ""}${job.country || ""}` : ""}
             </p>
           </div>
@@ -43,11 +43,9 @@ export function JobCard({
         {job.work_format ? <span className="rounded-full border border-line px-2 py-0.5 text-xs">{job.work_format}</span> : null}
         {job.seniority ? <span className="rounded-full border border-line px-2 py-0.5 text-xs">{job.seniority}</span> : null}
         {job.employment_type ? <span className="rounded-full border border-line px-2 py-0.5 text-xs">{job.employment_type}</span> : null}
-        {(job.system_tags || []).slice(0, 4).map((tag) => (
-          <span key={tag} className="rounded-full border border-line px-2 py-0.5 text-xs text-soft">
-            {tag}
-          </span>
-        ))}
+        {job.canonical_title ? (
+          <span className="rounded-full border border-line px-2 py-0.5 text-xs text-soft">{job.canonical_title}</span>
+        ) : null}
       </div>
 
       {isOpen ? (
@@ -56,7 +54,7 @@ export function JobCard({
           <div className="grid gap-2 text-sm text-soft sm:grid-cols-2">
             <span>Country: {job.country || "n/a"}</span>
             <span>City: {job.city || "n/a"}</span>
-            <span>Industry: {job.industry || "n/a"}</span>
+            <span>Role: {job.canonical_title || "n/a"}</span>
             <span>Salary: {salary || "n/a"}</span>
           </div>
           {job.source_link ? (
