@@ -15,7 +15,7 @@ IMPORTANT RULES:
 	•	Maximum 10 ai_keywords.
 
 ALLOWED CANONICAL TITLES
-[ "Product Designer", "Graphic Designer", "Brand Designer", "Motion Designer", "3D Designer", "UX/UI Designer", "Web Designer", "Art Director", "Creative Director", "Design Director", "Illustrator", "Type Designer", "Design Researcher", "Design Manager" ]
+[ "Product Designer", "Graphic Designer", "Brand Designer", "Motion Designer", "3D Designer", "UX/UI Designer", "Web Designer", "Art Director", "Creative Director", "Design Director", "Illustrator", "Type Designer", "Design Researcher", "Design Manager", "Content Creator", "Content Writer", "Editor", "SMM Manager", "Copywriter" ]
 
 ALLOWED SENIORITY
 [ "Intern", "Junior", "Middle", "Senior", "Lead", "Head" ]

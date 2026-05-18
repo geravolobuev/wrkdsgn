@@ -100,6 +100,7 @@ def _validate_payload(parsed: Any) -> dict[str, Any] | None:
         "Product Designer", "Graphic Designer", "Brand Designer", "Motion Designer", "3D Designer",
         "UX/UI Designer", "Web Designer", "Art Director", "Creative Director", "Design Director",
         "Illustrator", "Type Designer", "Design Researcher", "Design Manager",
+        "Content Creator", "Content Writer", "Editor", "SMM Manager", "Copywriter",
     }
     allowed_seniority = {"Intern", "Junior", "Middle", "Senior", "Lead", "Head"}
     allowed_employment = {"Full-time", "Part-time", "Project"}

@@ -144,6 +144,7 @@ def get_existing_by_hash(supabase: Client, content_hash: str) -> dict | None:
 def deterministic_filter(text: str) -> tuple[bool, str, int]:
     score = job_score(text)
     decision = classify_job_or_ad_by_score(text)
+    normalized = text.lower()
 
     if is_ad_or_funnel(text):
         return False, "ad_or_funnel", score
@@ -152,7 +153,17 @@ def deterministic_filter(text: str) -> tuple[bool, str, int]:
         return False, "score_ad", score
 
     if decision == "UNCERTAIN":
-        # Strictly non-AI filtering stage: uncertain treated as irrelevant.
+        # Keep non-AI filtering strict, but rescue clear internship/job-intent cases.
+        uncertain_positive = [
+            "стаж",
+            "intern",
+            "портфолио",
+            "резюме",
+            "удален",
+            "удалён",
+        ]
+        if any(marker in normalized for marker in uncertain_positive):
+            return True, "score_uncertain_but_job_signal", score
         return False, "score_uncertain", score
 
     return True, "score_job", score

@@ -2,19 +2,27 @@ import re
 
 POSITIVE_WEAK = [
     "вакансия",
+    "вакансии",
     "ищем",
+    "ищу",
     "hiring",
     "job",
     "open position",
     "portfolio",
+    "портфолио",
     "cv",
     "resume",
+    "резюме",
+    "intern",
+    "стаж",
 ]
 
 POSITIVE_STRONG = [
     "full-time",
     "remote",
     "contract",
+    "удален",
+    "удалён",
 ]
 
 NEGATIVE = [
