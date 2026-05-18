@@ -28,9 +28,9 @@ export function JobCard({
       <button className="w-full text-left" onClick={() => onToggle(job.id)} type="button">
         <div className="mb-2 flex items-start justify-between gap-4">
           <div>
-            <h3 className="text-lg font-semibold tracking-tight">{job.title || "Untitled Vacancy"}</h3>
+            <h3 className="text-lg font-semibold tracking-tight">{job.display_title || job.canonical_title || job.title || "Untitled Vacancy"}</h3>
             <p className="text-sm text-soft">
-              {job.company || "Unknown company"}
+              {job.company_name || job.company || "Unknown company"}
               {job.city || job.country ? ` · ${job.city || ""}${job.city && job.country ? ", " : ""}${job.country || ""}` : ""}
             </p>
           </div>
@@ -40,10 +40,10 @@ export function JobCard({
       </button>
 
       <div className="mt-3 flex flex-wrap items-center gap-2">
-        {job.remote_type ? <span className="rounded-full border border-line px-2 py-0.5 text-xs">{job.remote_type}</span> : null}
-        {job.level ? <span className="rounded-full border border-line px-2 py-0.5 text-xs">{job.level}</span> : null}
+        {job.work_format ? <span className="rounded-full border border-line px-2 py-0.5 text-xs">{job.work_format}</span> : null}
+        {job.seniority ? <span className="rounded-full border border-line px-2 py-0.5 text-xs">{job.seniority}</span> : null}
         {job.employment_type ? <span className="rounded-full border border-line px-2 py-0.5 text-xs">{job.employment_type}</span> : null}
-        {(job.specializations || []).slice(0, 4).map((tag) => (
+        {(job.system_tags || []).slice(0, 4).map((tag) => (
           <span key={tag} className="rounded-full border border-line px-2 py-0.5 text-xs text-soft">
             {tag}
           </span>
@@ -56,18 +56,9 @@ export function JobCard({
           <div className="grid gap-2 text-sm text-soft sm:grid-cols-2">
             <span>Country: {job.country || "n/a"}</span>
             <span>City: {job.city || "n/a"}</span>
-            <span>Role type: {job.role_type || "n/a"}</span>
+            <span>Industry: {job.industry || "n/a"}</span>
             <span>Salary: {salary || "n/a"}</span>
           </div>
-          {(job.semantic_tags || []).length > 0 ? (
-            <div className="flex flex-wrap gap-2">
-              {(job.semantic_tags || []).map((tag) => (
-                <span key={tag} className="rounded-full border border-line px-2 py-0.5 text-xs text-soft">
-                  {tag}
-                </span>
-              ))}
-            </div>
-          ) : null}
           {job.source_link ? (
             <a className="link text-sm" href={job.source_link} rel="noreferrer" target="_blank">
               Open original post

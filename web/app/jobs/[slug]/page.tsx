@@ -15,19 +15,19 @@ export default async function JobDetailPage({ params }: { params: { slug: string
   return (
     <article className="space-y-6">
       <header className="space-y-2">
-        <h1 className="text-3xl font-semibold tracking-tight">{job.title || "Untitled Vacancy"}</h1>
+        <h1 className="text-3xl font-semibold tracking-tight">{job.display_title || job.canonical_title || job.title || "Untitled Vacancy"}</h1>
         <p className="text-soft">
-          {job.company || "Unknown company"}
+          {job.company_name || job.company || "Unknown company"}
           {job.city || job.country ? ` · ${job.city || ""}${job.city && job.country ? ", " : ""}${job.country || ""}` : ""}
         </p>
         <p className="text-sm text-soft">Published {formatRelativeDate(published)}</p>
       </header>
 
       <div className="flex flex-wrap items-center gap-2">
-        {job.remote_type ? <span className="rounded-full border border-line px-2 py-0.5 text-xs">{job.remote_type}</span> : null}
-        {job.level ? <span className="rounded-full border border-line px-2 py-0.5 text-xs">{job.level}</span> : null}
+        {job.work_format ? <span className="rounded-full border border-line px-2 py-0.5 text-xs">{job.work_format}</span> : null}
+        {job.seniority ? <span className="rounded-full border border-line px-2 py-0.5 text-xs">{job.seniority}</span> : null}
         {job.employment_type ? <span className="rounded-full border border-line px-2 py-0.5 text-xs">{job.employment_type}</span> : null}
-        {(job.specializations || []).map((tag) => (
+        {(job.system_tags || []).map((tag) => (
           <span key={tag} className="rounded-full border border-line px-2 py-0.5 text-xs text-soft">{tag}</span>
         ))}
       </div>
@@ -42,9 +42,9 @@ export default async function JobDetailPage({ params }: { params: { slug: string
         <ul className="space-y-2 text-soft">
           <li>Country: {job.country || "n/a"}</li>
           <li>City: {job.city || "n/a"}</li>
-          <li>Role type: {job.role_type || "n/a"}</li>
-          <li>Tools: {(job.tools || []).join(", ") || "n/a"}</li>
-          <li>Languages: {(job.language || []).join(", ") || "n/a"}</li>
+          <li>Industry: {job.industry || "n/a"}</li>
+          <li>Company type: {job.company_type || "n/a"}</li>
+          <li>AI confidence: {job.confidence_score ?? "n/a"}</li>
           <li>Source channel: {job.source_channel}</li>
           <li>
             Source link:{" "}

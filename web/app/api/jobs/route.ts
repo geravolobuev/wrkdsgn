@@ -14,16 +14,16 @@ export async function GET(request: NextRequest) {
 
   const q = (searchParams.get("q") || "").trim();
   const specialization = (searchParams.get("specialization") || "").trim();
-  const level = (searchParams.get("level") || "").trim();
+  const seniority = (searchParams.get("seniority") || "").trim();
   const city = (searchParams.get("city") || "").trim();
   const country = (searchParams.get("country") || "").trim();
-  const remoteType = (searchParams.get("remote_type") || "").trim();
+  const workFormat = (searchParams.get("work_format") || "").trim();
   const employmentType = (searchParams.get("employment_type") || "").trim();
 
   let query = supabase
     .from("vacancies")
     .select(
-      "id,title,company,location,description,source_channel,source_link,created_at,published_at,slug,country,city,remote_type,employment_type,level,role_type,specializations,semantic_tags,tools,language,salary_min,salary_max",
+      "id,title,canonical_title,display_title,company,company_name,company_type,location,description,source_channel,source_link,created_at,published_at,slug,country,city,work_format,employment_type,seniority,system_tags,ai_keywords,industry,confidence_score,salary_min,salary_max",
       { count: "exact" }
     )
     .eq("is_job", true)
@@ -32,15 +32,15 @@ export async function GET(request: NextRequest) {
     .range(from, to);
 
   if (q) {
-    query = query.or(`title.ilike.%${q}%,company.ilike.%${q}%,description.ilike.%${q}%,city.ilike.%${q}%,country.ilike.%${q}%`);
+    query = query.or(`title.ilike.%${q}%,canonical_title.ilike.%${q}%,company.ilike.%${q}%,description.ilike.%${q}%,city.ilike.%${q}%,country.ilike.%${q}%`);
   }
 
   if (specialization) {
-    query = query.contains("specializations", [specialization]);
+    query = query.eq("canonical_title", specialization);
   }
 
-  if (level) {
-    query = query.eq("level", level);
+  if (seniority) {
+    query = query.eq("seniority", seniority);
   }
 
   if (city) {
@@ -51,8 +51,8 @@ export async function GET(request: NextRequest) {
     query = query.ilike("country", `%${country}%`);
   }
 
-  if (remoteType) {
-    query = query.eq("remote_type", remoteType);
+  if (workFormat) {
+    query = query.eq("work_format", workFormat);
   }
 
   if (employmentType) {
