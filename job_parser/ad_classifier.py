@@ -14,11 +14,31 @@ AD_EXTRA_MARKERS = [
     "wb",
     "wildberries",
     "легкие деньги",
+    "размещение объявлений",
+    "размещение вакансий",
+    "реклама:",
+    "все наши проекты",
+    "топ -",
+    "часа топ",
+    "закреп поста",
+    "прайс",
+    "стоимость размещения",
+    "bot",
+    "_bot",
 ]
 
 
 def is_ad_or_funnel(text: str) -> bool:
     normalized = text.lower()
+
+    hard_reject_markers = [
+        "размещение объявлений",
+        "размещение вакансий",
+        "реклама:",
+        "все наши проекты",
+    ]
+    if any(marker in normalized for marker in hard_reject_markers):
+        return True
 
     if classify_job_or_ad_by_score(text) == "AD":
         return True
