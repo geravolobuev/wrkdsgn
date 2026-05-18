@@ -104,11 +104,19 @@ def extract_raw_title(text: str) -> str | None:
 
 
 def extract_salary_range(text: str) -> tuple[int | None, int | None]:
+    salary_context_re = re.compile(
+        r"(зарп|зп|salary|usd|eur|руб|₽|\$|€|k\b|тыс)",
+        re.IGNORECASE,
+    )
+    if not salary_context_re.search(text):
+        return None, None
+
     nums = re.findall(r"\d[\d\s]{2,}", text)
     values: list[int] = []
     for n in nums:
         digits = int(re.sub(r"\s+", "", n))
-        if digits > 0:
+        # Keep realistic salary bounds, ignore phones/ids/noise.
+        if 10_000 <= digits <= 2_000_000_000:
             values.append(digits)
     if not values:
         return None, None
