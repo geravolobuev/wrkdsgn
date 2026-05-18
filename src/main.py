@@ -15,11 +15,7 @@ sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from job_parser.ad_classifier import is_ad_or_funnel
 from job_parser.job_classifier import classify_job_or_ad_by_score, job_score
-from job_parser.job_splitter import split_jobs
-from job_parser.location_extractor import extract_location
-from job_parser.openrouter_client import classify_uncertain_job_ad, enrich_vacancy_with_ai
-from job_parser.role_extractor import extract_canonical_role
-from job_parser.taxonomy_mapper import map_role_to_taxonomy
+from job_parser.openrouter_client import enrich_vacancy_with_ai
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -34,7 +30,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 TELETHON_SESSION_NAME = os.getenv("TELETHON_SESSION_NAME", "telegram_session")
 FETCH_LIMIT = int(os.getenv("FETCH_LIMIT", "30"))
-ENRICHMENT_VERSION = os.getenv("ENRICHMENT_VERSION", "v2_strict")
+ENRICHMENT_VERSION = os.getenv("ENRICHMENT_VERSION", "v3_structured")
 
 
 def validate_env() -> None:
@@ -96,76 +92,19 @@ def slugify(value: str) -> str:
     return cleaned[:90] if cleaned else "job"
 
 
-def infer_seniority(text: str) -> str | None:
-    low = text.lower()
-    if "junior" in low or "джун" in low:
-        return "junior"
-    if "middle" in low or "мид" in low:
-        return "middle"
-    if "senior" in low or "сеньор" in low:
-        return "senior"
-    if "lead" in low or "тимлид" in low:
-        return "lead"
-    if "intern" in low or "стаж" in low:
-        return "intern"
+def build_source_url(channel: str, message_id: int) -> str | None:
+    if channel.startswith("@"):
+        return f"https://t.me/{channel[1:]}/{message_id}"
     return None
 
 
-def infer_employment_type(text: str) -> str | None:
-    low = text.lower()
-    if any(x in low for x in ["full-time", "full time", "полная занятость"]):
-        return "full_time"
-    if any(x in low for x in ["part-time", "part time", "частичная занятость"]):
-        return "part_time"
-    if any(x in low for x in ["contract", "контракт"]):
-        return "contract"
-    if any(x in low for x in ["freelance", "фриланс"]):
-        return "freelance"
-    if any(x in low for x in ["intern", "стаж"]):
-        return "internship"
-    return None
-
-
-def extract_fields(text: str) -> dict:
+def extract_raw_title(text: str) -> str | None:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
-    title = lines[0] if lines else None
-
-    company = None
-    salary = None
-    location = None
-
-    for line in lines:
-        low = line.lower()
-        if company is None and ("компан" in low or "company" in low or " в " in low):
-            company = line[:120]
-        if salary is None and ("зарп" in low or "$" in line or "₽" in line or "usd" in low or "eur" in low):
-            salary = line
-        if location is None and (
-            "удален" in low
-            or "удалён" in low
-            or "remote" in low
-            or "офис" in low
-            or "location" in low
-            or "city" in low
-            or "hybrid" in low
-        ):
-            location = line
-
-    return {
-        "raw_title": title,
-        "company": company,
-        "salary": salary,
-        "location": location,
-        "description": text.strip(),
-        "level": infer_seniority(text),
-        "employment_type": infer_employment_type(text),
-    }
+    return lines[0][:160] if lines else None
 
 
-def parse_salary_range(salary_line: str | None) -> tuple[int | None, int | None]:
-    if not salary_line:
-        return None, None
-    nums = re.findall(r"\d[\d\s]{2,}", salary_line)
+def extract_salary_range(text: str) -> tuple[int | None, int | None]:
+    nums = re.findall(r"\d[\d\s]{2,}", text)
     values: list[int] = []
     for n in nums:
         digits = int(re.sub(r"\s+", "", n))
@@ -178,18 +117,6 @@ def parse_salary_range(salary_line: str | None) -> tuple[int | None, int | None]
     return min(values), max(values)
 
 
-def build_source_url(channel: str, message_id: int) -> str | None:
-    if channel.startswith("@"):
-        return f"https://t.me/{channel[1:]}/{message_id}"
-    return None
-
-
-def get_existing_by_hash(supabase: Client, content_hash: str) -> dict | None:
-    res = supabase.table("vacancies").select("*").eq("content_hash", content_hash).limit(1).execute()
-    rows = res.data or []
-    return rows[0] if rows else None
-
-
 def should_skip_enrichment(existing: dict | None, content_hash: str) -> bool:
     if not existing:
         return False
@@ -200,23 +127,27 @@ def should_skip_enrichment(existing: dict | None, content_hash: str) -> bool:
     )
 
 
-def _final_stage_decision(text: str) -> tuple[bool, str, int]:
-    score = job_score(text)
-    scored = classify_job_or_ad_by_score(text)
+def get_existing_by_hash(supabase: Client, content_hash: str) -> dict | None:
+    res = supabase.table("vacancies").select("*").eq("content_hash", content_hash).limit(1).execute()
+    rows = res.data or []
+    return rows[0] if rows else None
 
-    if scored == "JOB":
-        return True, "score_job", score
-    if scored == "AD":
+
+def deterministic_filter(text: str) -> tuple[bool, str, int]:
+    score = job_score(text)
+    decision = classify_job_or_ad_by_score(text)
+
+    if is_ad_or_funnel(text):
+        return False, "ad_or_funnel", score
+
+    if decision == "AD":
         return False, "score_ad", score
 
-    ai_decision = classify_uncertain_job_ad(text)
-    if ai_decision == "JOB":
-        return True, "ai_job", score
-    if ai_decision == "AD":
-        return False, "ai_ad", score
+    if decision == "UNCERTAIN":
+        # Strictly non-AI filtering stage: uncertain treated as irrelevant.
+        return False, "score_uncertain", score
 
-    # deterministic fallback when AI uncertain/unavailable
-    return score >= 1, "fallback_score", score
+    return True, "score_job", score
 
 
 async def run() -> None:
@@ -233,8 +164,8 @@ async def run() -> None:
             await client.sign_in(TG_PHONE, code)
 
         total_processed = 0
-        total_rejected = 0
-        total_saved = 0
+        total_filtered_out = 0
+        total_enriched = 0
 
         for source_channel in source_channels:
             try:
@@ -249,115 +180,124 @@ async def run() -> None:
                     messages.append(message)
             messages.reverse()
 
-            channel_saved = 0
+            channel_enriched = 0
 
             for msg in messages:
                 raw_text = msg.message.strip()
+                if not raw_text:
+                    continue
 
-                is_job, decision_source, score = _final_stage_decision(raw_text)
+                # 1) scrape + store raw immediately
+                content_hash = hashlib.sha256(f"{source_channel}:{msg.id}:{raw_text}".encode("utf-8")).hexdigest()
+                source_link = build_source_url(source_channel, msg.id)
+                raw_title = extract_raw_title(raw_text)
+                salary_min, salary_max = extract_salary_range(raw_text)
+                slug = slugify(f"{raw_title or 'job'}-{source_channel.strip('@')}-{msg.id}")
+
+                raw_row = {
+                    "source_channel": source_channel,
+                    "source_message_id": msg.id,
+                    "published_at": to_iso(msg.date) or datetime.now(timezone.utc).isoformat(),
+                    "raw_text": raw_text,
+                    "raw_title": raw_title,
+                    "title": raw_title,
+                    "description": raw_text,
+                    "source_link": source_link,
+                    "source_url": source_link,
+                    "slug": slug,
+                    "content_hash": content_hash,
+                    "salary_min": salary_min,
+                    "salary_max": salary_max,
+                    "pipeline_stage": "raw_saved",
+                    "raw_saved_at": datetime.now(timezone.utc).isoformat(),
+                }
+                supabase.table("vacancies").upsert(raw_row, on_conflict="content_hash", ignore_duplicates=True).execute()
+
+                existing = get_existing_by_hash(supabase, content_hash)
+                if should_skip_enrichment(existing, content_hash):
+                    continue
+
+                # 2) deterministic filter (NO AI)
+                accepted, reason, score = deterministic_filter(raw_text)
                 logger.info(
-                    "Classify channel=%s message_id=%s score=%s decision=%s source=%s",
+                    "Filter channel=%s message_id=%s score=%s accepted=%s reason=%s",
                     source_channel,
                     msg.id,
                     score,
-                    "JOB" if is_job else "AD",
-                    decision_source,
+                    accepted,
+                    reason,
                 )
 
-                if not is_job or is_ad_or_funnel(raw_text):
-                    total_rejected += 1
+                if not accepted:
+                    total_filtered_out += 1
+                    supabase.table("vacancies").update(
+                        {
+                            "is_job": False,
+                            "filter_status": "rejected",
+                            "filter_reason": reason,
+                            "pipeline_stage": "filtered_out",
+                        }
+                    ).eq("content_hash", content_hash).execute()
                     continue
 
-                split_items = split_jobs(raw_text)
+                # 3) AI enrichment only for filtered valid jobs
+                ai = await asyncio.to_thread(enrich_vacancy_with_ai, raw_text)
+                if ai is None:
+                    # no blocking failures
+                    supabase.table("vacancies").update(
+                        {
+                            "is_job": True,
+                            "filter_status": "accepted",
+                            "filter_reason": reason,
+                            "pipeline_stage": "ai_failed",
+                        }
+                    ).eq("content_hash", content_hash).execute()
+                    continue
 
-                for part_idx, item in enumerate(split_items):
-                    job_text = (item.get("raw_text") or "").strip()
-                    if not job_text:
-                        continue
+                # 4) store enriched structured result together with raw row
+                enriched_row = {
+                    "is_job": True,
+                    "filter_status": "accepted",
+                    "filter_reason": reason,
+                    "pipeline_stage": "enriched",
+                    "canonical_title": ai.get("canonical_title"),
+                    "display_title": ai.get("display_title"),
+                    "seniority": ai.get("seniority"),
+                    "employment_type": ai.get("employment_type"),
+                    "work_format": ai.get("work_format"),
+                    "country": ai.get("country"),
+                    "city": ai.get("city"),
+                    "system_tags": ai.get("system_tags") or [],
+                    "ai_keywords": ai.get("ai_keywords") or [],
+                    "industry": ai.get("industry"),
+                    "company_type": ai.get("company_type"),
+                    "company_name": ai.get("company_name"),
+                    "confidence_score": ai.get("confidence_score"),
+                    "title": ai.get("display_title") or ai.get("canonical_title") or raw_title,
+                    "enriched_at": datetime.now(timezone.utc).isoformat(),
+                    "enrichment_version": ENRICHMENT_VERSION,
+                    "enrichment_hash": content_hash,
+                }
+                supabase.table("vacancies").update(enriched_row).eq("content_hash", content_hash).execute()
 
-                    content_hash = hashlib.sha256(
-                        f"{source_channel}:{msg.id}:{part_idx}:{job_text}".encode("utf-8")
-                    ).hexdigest()
-
-                    existing = get_existing_by_hash(supabase, content_hash)
-                    if should_skip_enrichment(existing, content_hash):
-                        continue
-
-                    base = extract_fields(job_text)
-                    canonical_title = extract_canonical_role(job_text)
-                    specializations = map_role_to_taxonomy(canonical_title)
-
-                    # Strict taxonomy gate: keep only jobs mapped to controlled vocabulary
-                    if not specializations:
-                        total_rejected += 1
-                        continue
-
-                    loc = extract_location(job_text)
-                    ai = enrich_vacancy_with_ai(job_text)
-
-                    if ai is not None and ai.get("is_job") is False:
-                        total_rejected += 1
-                        continue
-
-                    salary_min, salary_max = parse_salary_range(base.get("salary"))
-                    if ai is not None:
-                        salary_min = ai.get("salary_min") if ai.get("salary_min") is not None else salary_min
-                        salary_max = ai.get("salary_max") if ai.get("salary_max") is not None else salary_max
-
-                    source_link = build_source_url(source_channel, msg.id)
-                    slug = slugify(f"{canonical_title}-{source_channel.strip('@')}-{msg.id}-{part_idx}")
-
-                    row = {
-                        "source_channel": source_channel,
-                        "source_message_id": msg.id,
-                        "published_at": to_iso(msg.date) or datetime.now(timezone.utc).isoformat(),
-                        "raw_text": job_text,
-                        "raw_title": base["raw_title"],
-                        "canonical_title": canonical_title,
-                        "title": canonical_title,
-                        "company": base["company"],
-                        "location": base["location"],
-                        "description": base["description"],
-                        "source_link": source_link,
-                        "source_url": source_link,
-                        "slug": slug,
-                        "content_hash": content_hash,
-                        "is_job": True,
-                        "country": loc["country"] or (ai.get("country") if ai else None),
-                        "city": loc["city"] or (ai.get("city") if ai else None),
-                        "remote_type": loc["remote_type"] or (ai.get("remote_type") if ai else None),
-                        "employment_type": (ai.get("employment_type") if ai else None) or base["employment_type"],
-                        "level": (ai.get("level") if ai else None) or base["level"],
-                        "role_type": ai.get("role_type") if ai else None,
-                        "specializations": specializations,
-                        "semantic_tags": ai.get("semantic_tags") if ai else [],
-                        "tools": ai.get("tools") if ai else [],
-                        "language": ai.get("language") if ai else [],
-                        "salary_min": salary_min,
-                        "salary_max": salary_max,
-                        "enriched_at": datetime.now(timezone.utc).isoformat(),
-                        "enrichment_version": ENRICHMENT_VERSION,
-                        "enrichment_hash": content_hash,
-                    }
-
-                    supabase.table("vacancies").upsert(
-                        row,
-                        on_conflict="content_hash",
-                        ignore_duplicates=True,
-                    ).execute()
-
-                    channel_saved += 1
-                    total_saved += 1
+                channel_enriched += 1
+                total_enriched += 1
 
             total_processed += len(messages)
-            logger.info("Channel summary %s: processed=%s saved=%s", source_channel, len(messages), channel_saved)
+            logger.info(
+                "Channel summary %s: processed=%s filtered_out=%s enriched=%s",
+                source_channel,
+                len(messages),
+                total_filtered_out,
+                channel_enriched,
+            )
 
         logger.info(
-            "Total summary: channels=%s processed=%s rejected=%s saved=%s",
+            "Total summary: channels=%s processed=%s filtered_out=%s enriched=%s",
             len(source_channels),
             total_processed,
-            total_rejected,
-            total_saved,
+            total_filtered_out,
+            total_enriched,
         )
 
 
