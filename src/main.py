@@ -2,7 +2,6 @@ import asyncio
 import hashlib
 import logging
 import os
-import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -70,24 +69,6 @@ def build_source_url(channel: str, message_id: int) -> str | None:
 def extract_raw_title(text: str) -> str | None:
     lines = [line.strip() for line in text.splitlines() if line.strip()]
     return lines[0][:160] if lines else None
-
-
-def extract_salary_range(text: str) -> tuple[int | None, int | None]:
-    salary_context_re = re.compile(r"(зарп|зп|salary|usd|eur|руб|₽|\$|€|k\b|тыс)", re.IGNORECASE)
-    if not salary_context_re.search(text):
-        return None, None
-
-    nums = re.findall(r"\d[\d\s]{2,}", text)
-    values: list[int] = []
-    for n in nums:
-        digits = int(re.sub(r"\s+", "", n))
-        if 10_000 <= digits <= 2_000_000_000:
-            values.append(digits)
-    if not values:
-        return None, None
-    if len(values) == 1:
-        return values[0], None
-    return min(values), max(values)
 
 
 def get_existing_by_hash(supabase: Client, content_hash: str) -> dict | None:
@@ -175,7 +156,6 @@ async def run() -> None:
                     continue
 
                 raw_title = extract_raw_title(raw_text)
-                salary_min, salary_max = extract_salary_range(raw_text)
                 source_link = build_source_url(source_channel, msg.id)
                 slug = slugify(f"{ai.get('role') or raw_title or 'job'}-{source_channel.strip('@')}-{msg.id}-{content_hash[:8]}")
 
@@ -190,11 +170,8 @@ async def run() -> None:
                     "display_title": ai.get("role"),
                     "description": raw_text,
                     "source_link": source_link,
-                    "source_url": source_link,
                     "slug": slug,
                     "content_hash": content_hash,
-                    "salary_min": salary_min,
-                    "salary_max": salary_max,
                     "is_job": True,
                     "filter_status": "accepted",
                     "filter_reason": ai.get("reason_short") or "ai_relevant",
