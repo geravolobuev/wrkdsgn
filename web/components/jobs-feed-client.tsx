@@ -22,9 +22,9 @@ const ROLES = [
   "Design Manager",
   "UI Designer",
 ];
-const SENIORITIES = ["", "Intern", "Junior", "Middle", "Senior", "Lead", "Head"];
-const WORK_FORMATS = ["", "Remote", "Hybrid", "Onsite"];
-const EMPLOYMENT_TYPES = ["", "Full-time", "Part-time", "Project"];
+const SENIORITIES = ["", "Junior", "Middle", "Senior", "Lead", "Head / Director", "Unknown"];
+const WORK_FORMATS = ["", "Remote", "Hybrid", "On-site", "Unknown"];
+const EMPLOYMENT_TYPES = ["", "Full-time", "Part-time", "Contract", "Freelance", "Internship", "Unknown"];
 
 type ApiResponse = { jobs: Job[]; page: number; hasMore: boolean; error?: string };
 
@@ -144,7 +144,7 @@ export function JobsFeedClient() {
           type="text"
           name="q"
           defaultValue={q}
-          placeholder="Search title/company/description"
+          placeholder="Search title/description"
           className="w-full rounded-md border border-line px-3 py-2 text-sm outline-none focus:border-ink lg:col-span-2"
         />
 
