@@ -8,6 +8,8 @@ from typing import Any
 import requests
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+OLLAMA_DEFAULT_URL = "https://ollama.com/api/chat"
+OLLAMA_DEFAULT_MODEL = "qwen3-coder:480b-cloud"
 MODEL_FALLBACK_CHAIN = [
     "meta-llama/llama-3.3-8b-instruct:free",
     "qwen/qwen-2.5-7b-instruct:free",
@@ -113,26 +115,72 @@ def _validate_payload(parsed: Any) -> dict[str, Any] | None:
     }
 
 
-def enrich_vacancy_with_ai(raw_text: str) -> dict[str, Any] | None:
-    if os.getenv("ENABLE_AI_ENRICHMENT", "true").lower() != "true":
-        logger.info("AI enrichment disabled by ENABLE_AI_ENRICHMENT=false")
+def _extract_content_from_response(data: dict[str, Any]) -> str | None:
+    # OpenAI/OpenRouter-like response.
+    content = data.get("choices", [{}])[0].get("message", {}).get("content")
+    if isinstance(content, str):
+        return content
+    # Ollama /api/chat-like response.
+    content = data.get("message", {}).get("content")
+    if isinstance(content, str):
+        return content
+    return None
+
+
+def _try_ollama(prompt: str, timeout_sec: int, max_retries: int) -> dict[str, Any] | None:
+    model = os.getenv("OLLAMA_MODEL", OLLAMA_DEFAULT_MODEL).strip() or OLLAMA_DEFAULT_MODEL
+    url = os.getenv("OLLAMA_API_URL", OLLAMA_DEFAULT_URL).strip() or OLLAMA_DEFAULT_URL
+    api_key = os.getenv("OLLAMA_API_KEY", "").strip()
+    enabled = os.getenv("OLLAMA_ENABLED", "true").lower() == "true"
+    if not enabled:
         return None
 
-    api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
-    if not api_key:
-        logger.warning("OPENROUTER_API_KEY is not set; skipping enrichment")
-        return None
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
 
-    timeout_sec = int(os.getenv("OPENROUTER_TIMEOUT", "10"))
-    max_retries = max(1, int(os.getenv("OPENROUTER_MAX_RETRIES", "1")))
+    payload = {
+        "model": model,
+        "stream": False,
+        "temperature": 0,
+        "max_tokens": 240,
+        "messages": [
+            {"role": "system", "content": "Return strict JSON only."},
+            {"role": "user", "content": prompt},
+        ],
+    }
 
-    try:
-        template = _read_prompt_template()
-    except Exception as exc:
-        logger.error("Cannot read prompt file: %s", exc)
-        return None
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = requests.post(url, json=payload, headers=headers, timeout=timeout_sec)
+            if response.status_code >= 400:
+                logger.warning("Enrichment provider=ollama model=%s api_error=%s attempt=%s", model, response.status_code, attempt)
+                continue
 
-    prompt = template.replace("{{VACANCY_TEXT}}", raw_text[:3000])
+            content = _extract_content_from_response(response.json())
+            if not isinstance(content, str):
+                logger.warning("Enrichment provider=ollama model=%s empty_content attempt=%s", model, attempt)
+                continue
+
+            parsed = json.loads(content)
+            validated = _validate_payload(parsed)
+            if validated is None:
+                logger.warning("Enrichment provider=ollama model=%s invalid_schema", model)
+                continue
+
+            validated["selected_provider"] = "ollama"
+            validated["selected_model"] = model
+            logger.info("Enrichment success provider=ollama model=%s", model)
+            return validated
+        except (requests.RequestException, json.JSONDecodeError, ValueError, TypeError, KeyError) as exc:
+            logger.warning("Enrichment provider=ollama model=%s failed attempt=%s err=%s", model, attempt, exc)
+            time.sleep(0.2)
+            continue
+
+    return None
+
+
+def _try_openrouter(prompt: str, timeout_sec: int, max_retries: int, api_key: str) -> dict[str, Any] | None:
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
@@ -152,25 +200,59 @@ def enrich_vacancy_with_ai(raw_text: str) -> dict[str, Any] | None:
                 }
                 response = requests.post(OPENROUTER_URL, json=payload, headers=headers, timeout=timeout_sec)
                 if response.status_code >= 400:
-                    logger.warning("Enrichment model=%s api_error=%s attempt=%s", model, response.status_code, attempt)
+                    logger.warning("Enrichment provider=openrouter model=%s api_error=%s attempt=%s", model, response.status_code, attempt)
                     continue
 
-                content = response.json().get("choices", [{}])[0].get("message", {}).get("content")
+                content = _extract_content_from_response(response.json())
                 if not isinstance(content, str):
                     continue
 
                 parsed = json.loads(content)
                 validated = _validate_payload(parsed)
                 if validated is None:
-                    logger.warning("Enrichment model=%s invalid_schema", model)
+                    logger.warning("Enrichment provider=openrouter model=%s invalid_schema", model)
                     continue
 
-                logger.info("Enrichment success model=%s", model)
+                validated["selected_provider"] = "openrouter"
+                validated["selected_model"] = model
+                logger.info("Enrichment success provider=openrouter model=%s", model)
                 return validated
             except (requests.RequestException, json.JSONDecodeError, ValueError, TypeError, KeyError) as exc:
-                logger.warning("Enrichment model=%s failed attempt=%s err=%s", model, attempt, exc)
+                logger.warning("Enrichment provider=openrouter model=%s failed attempt=%s err=%s", model, attempt, exc)
                 time.sleep(0.2)
                 continue
+
+    return None
+
+
+def enrich_vacancy_with_ai(raw_text: str) -> dict[str, Any] | None:
+    if os.getenv("ENABLE_AI_ENRICHMENT", "true").lower() != "true":
+        logger.info("AI enrichment disabled by ENABLE_AI_ENRICHMENT=false")
+        return None
+
+    openrouter_api_key = os.getenv("OPENROUTER_API_KEY", "").strip()
+
+    timeout_sec = int(os.getenv("OPENROUTER_TIMEOUT", "10"))
+    max_retries = max(1, int(os.getenv("OPENROUTER_MAX_RETRIES", "1")))
+
+    try:
+        template = _read_prompt_template()
+    except Exception as exc:
+        logger.error("Cannot read prompt file: %s", exc)
+        return None
+
+    prompt = template.replace("{{VACANCY_TEXT}}", raw_text[:3000])
+    ollama_result = _try_ollama(prompt=prompt, timeout_sec=timeout_sec, max_retries=max_retries)
+    if ollama_result is not None:
+        return ollama_result
+
+    if not openrouter_api_key:
+        logger.warning("OLLAMA failed and OPENROUTER_API_KEY is not set; cannot continue enrichment")
+        return None
+
+    openrouter_result = _try_openrouter(prompt=prompt, timeout_sec=timeout_sec, max_retries=max_retries, api_key=openrouter_api_key)
+    if openrouter_result is not None:
+        return openrouter_result
 
     logger.warning("All enrichment models failed")
     return None

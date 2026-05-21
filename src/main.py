@@ -44,8 +44,10 @@ def validate_env() -> None:
         raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
     if os.getenv("ENABLE_AI_ENRICHMENT", "true").lower() != "true":
         raise RuntimeError("ENABLE_AI_ENRICHMENT must be true for current MVP pipeline")
-    if not os.getenv("OPENROUTER_API_KEY", "").strip():
-        raise RuntimeError("OPENROUTER_API_KEY is required for current MVP pipeline")
+    has_ollama = os.getenv("OLLAMA_ENABLED", "true").lower() == "true"
+    has_openrouter = bool(os.getenv("OPENROUTER_API_KEY", "").strip())
+    if not has_ollama and not has_openrouter:
+        raise RuntimeError("No AI provider configured: enable Ollama or set OPENROUTER_API_KEY")
 
 
 def make_supabase() -> Client:
