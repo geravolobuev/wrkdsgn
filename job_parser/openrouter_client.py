@@ -132,52 +132,28 @@ def _try_ollama(prompt: str, timeout_sec: int, max_retries: int) -> dict[str, An
     url = os.getenv("OLLAMA_API_URL", OLLAMA_DEFAULT_URL).strip() or OLLAMA_DEFAULT_URL
     api_key = os.getenv("OLLAMA_API_KEY", "").strip()
     enabled = os.getenv("OLLAMA_ENABLED", "true").lower() == "true"
-    api_compat = os.getenv("OLLAMA_API_COMPAT", "ollama").strip().lower()
-    auth_header = os.getenv("OLLAMA_AUTH_HEADER", "Authorization").strip() or "Authorization"
-    auth_scheme = os.getenv("OLLAMA_AUTH_SCHEME", "Bearer").strip()
     if not enabled:
         return None
 
     headers = {"Content-Type": "application/json"}
     if api_key:
-        headers[auth_header] = f"{auth_scheme} {api_key}".strip()
+        headers["Authorization"] = f"Bearer {api_key}"
 
-    is_openai_compat = api_compat == "openai" or "/v1/" in url or url.endswith("/chat/completions")
-    if is_openai_compat:
-        payload = {
-            "model": model,
-            "temperature": 0,
-            "max_tokens": 240,
-            "messages": [
-                {"role": "system", "content": "Return strict JSON only."},
-                {"role": "user", "content": prompt},
-            ],
-        }
-    else:
-        payload = {
-            "model": model,
-            "stream": False,
-            "temperature": 0,
-            "max_tokens": 240,
-            "messages": [
-                {"role": "system", "content": "Return strict JSON only."},
-                {"role": "user", "content": prompt},
-            ],
-        }
+    payload = {
+        "model": model,
+        "stream": False,
+        "temperature": 0,
+        "max_tokens": 240,
+        "messages": [
+            {"role": "system", "content": "Return strict JSON only."},
+            {"role": "user", "content": prompt},
+        ],
+    }
 
     for attempt in range(1, max_retries + 1):
         try:
             response = requests.post(url, json=payload, headers=headers, timeout=timeout_sec)
             if response.status_code >= 400:
-                if response.status_code == 401:
-                    logger.warning(
-                        "Enrichment provider=ollama unauthorized url=%s compat=%s auth_header=%s auth_scheme=%s body=%s",
-                        url,
-                        api_compat,
-                        auth_header,
-                        auth_scheme,
-                        (response.text or "")[:180],
-                    )
                 logger.warning("Enrichment provider=ollama model=%s api_error=%s attempt=%s", model, response.status_code, attempt)
                 continue
 
