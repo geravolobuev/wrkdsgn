@@ -44,14 +44,12 @@ export function JobsFeedClient() {
   const q = searchParams.get("q") || "";
   const specialization = searchParams.get("specialization") || "";
   const seniority = searchParams.get("seniority") || "";
-  const city = searchParams.get("city") || "";
-  const country = searchParams.get("country") || "";
   const workFormat = searchParams.get("work_format") || "";
   const employmentType = searchParams.get("employment_type") || "";
 
   const key = useMemo(
-    () => JSON.stringify({ q, specialization, seniority, city, country, workFormat, employmentType }),
-    [q, specialization, seniority, city, country, workFormat, employmentType]
+    () => JSON.stringify({ q, specialization, seniority, workFormat, employmentType }),
+    [q, specialization, seniority, workFormat, employmentType]
   );
 
   const loadPage = useCallback(
@@ -66,8 +64,6 @@ export function JobsFeedClient() {
         if (q) params.set("q", q);
         if (specialization) params.set("specialization", specialization);
         if (seniority) params.set("seniority", seniority);
-        if (city) params.set("city", city);
-        if (country) params.set("country", country);
         if (workFormat) params.set("work_format", workFormat);
         if (employmentType) params.set("employment_type", employmentType);
         params.set("page", String(targetPage));
@@ -85,7 +81,7 @@ export function JobsFeedClient() {
         setLoading(false);
       }
     },
-    [q, specialization, seniority, city, country, workFormat, employmentType]
+    [q, specialization, seniority, workFormat, employmentType]
   );
 
   useEffect(() => {
@@ -123,16 +119,12 @@ export function JobsFeedClient() {
     const fq = String(formData.get("q") || "").trim();
     const fspecialization = String(formData.get("specialization") || "").trim();
     const fseniority = String(formData.get("seniority") || "").trim();
-    const fcity = String(formData.get("city") || "").trim();
-    const fcountry = String(formData.get("country") || "").trim();
     const fworkFormat = String(formData.get("work_format") || "").trim();
     const femploymentType = String(formData.get("employment_type") || "").trim();
 
     if (fq) params.set("q", fq);
     if (fspecialization) params.set("specialization", fspecialization);
     if (fseniority) params.set("seniority", fseniority);
-    if (fcity) params.set("city", fcity);
-    if (fcountry) params.set("country", fcountry);
     if (fworkFormat) params.set("work_format", fworkFormat);
     if (femploymentType) params.set("employment_type", femploymentType);
 
@@ -168,21 +160,6 @@ export function JobsFeedClient() {
           ))}
         </select>
 
-        <input
-          type="text"
-          name="city"
-          defaultValue={city}
-          placeholder="City"
-          className="rounded-md border border-line px-3 py-2 text-sm"
-        />
-
-        <input
-          type="text"
-          name="country"
-          defaultValue={country}
-          placeholder="Country"
-          className="rounded-md border border-line px-3 py-2 text-sm"
-        />
 
         <select name="work_format" defaultValue={workFormat} className="rounded-md border border-line px-3 py-2 text-sm">
           {WORK_FORMATS.map((item) => (
