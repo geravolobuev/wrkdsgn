@@ -165,7 +165,6 @@ async def run() -> None:
                     "source_message_id": msg.id,
                     "published_at": to_iso(msg.date) or datetime.now(timezone.utc).isoformat(),
                     "raw_text": raw_text,
-                    "raw_title": raw_title,
                     "title": ai.get("role") or raw_title,
                     "canonical_title": ai.get("role"),
                     "display_title": ai.get("role"),
