@@ -154,6 +154,12 @@ def _try_ollama(prompt: str, timeout_sec: int, max_retries: int) -> dict[str, An
         try:
             response = requests.post(url, json=payload, headers=headers, timeout=timeout_sec)
             if response.status_code >= 400:
+                if response.status_code == 401:
+                    logger.warning(
+                        "Enrichment provider=ollama unauthorized url=%s model=%s hint=check OLLAMA_API_KEY and endpoint",
+                        url,
+                        model,
+                    )
                 logger.warning("Enrichment provider=ollama model=%s api_error=%s attempt=%s", model, response.status_code, attempt)
                 continue
 
