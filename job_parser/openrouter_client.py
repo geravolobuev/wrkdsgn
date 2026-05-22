@@ -11,9 +11,9 @@ OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 OLLAMA_DEFAULT_URL = "https://ollama.com/api/chat"
 OLLAMA_DEFAULT_MODEL = "qwen3-coder:480b-cloud"
 MODEL_FALLBACK_CHAIN = [
-    "meta-llama/llama-3.3-8b-instruct:free",
-    "qwen/qwen-2.5-7b-instruct:free",
-    "google/gemma-2-9b-it:free",
+    "google/gemma-4-31b-it:free",
+    "openai/gpt-oss-120b:free",
+    "nvidia/nemotron-3-super-120b-a12b:free",
 ]
 OPTIONAL_GENERIC_FALLBACK = "openrouter/free"
 
