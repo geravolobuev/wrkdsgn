@@ -102,8 +102,31 @@ def extract_raw_title(text: str) -> str | None:
     return lines[0][:160] if lines else None
 
 
+def make_dedupe_key(text: str) -> str:
+    lowered = text.lower()
+    lowered = re.sub(r"https?://\S+", " ", lowered)
+    lowered = re.sub(r"@\w+", " ", lowered)
+    lowered = re.sub(r"[\w\.-]+@[\w\.-]+\.\w+", " ", lowered)
+    lowered = re.sub(r"[\d\W_]+", " ", lowered, flags=re.UNICODE)
+    lowered = re.sub(r"\s+", " ", lowered).strip()
+    normalized = lowered[:1200]
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+
+
 def get_existing_by_hash(supabase: Client, content_hash: str) -> dict | None:
     res = supabase.table("vacancies").select("*").eq("content_hash", content_hash).limit(1).execute()
+    rows = res.data or []
+    return rows[0] if rows else None
+
+
+def get_existing_by_dedupe_key(supabase: Client, dedupe_key: str) -> dict | None:
+    res = (
+        supabase.table("vacancies")
+        .select("*")
+        .eq("dedupe_key", dedupe_key)
+        .limit(1)
+        .execute()
+    )
     rows = res.data or []
     return rows[0] if rows else None
 
@@ -165,6 +188,17 @@ async def run() -> None:
                 existing = get_existing_by_hash(supabase, content_hash)
                 if should_skip(existing, content_hash):
                     return {"status": "skip"}
+                dedupe_key = make_dedupe_key(part_text)
+                existing_duplicate = get_existing_by_dedupe_key(supabase, dedupe_key)
+                if existing_duplicate:
+                    return {
+                        "status": "dup",
+                        "msg": msg,
+                        "split_idx": split_idx,
+                        "existing_duplicate_id": existing_duplicate.get("id"),
+                        "existing_duplicate_channel": existing_duplicate.get("source_channel"),
+                        "existing_duplicate_message_id": existing_duplicate.get("source_message_id"),
+                    }
 
                 async with sem:
                     ai = await asyncio.to_thread(enrich_vacancy_with_ai, part_text)
@@ -175,6 +209,7 @@ async def run() -> None:
                     "raw_text": part_text,
                     "split_idx": split_idx,
                     "content_hash": content_hash,
+                    "dedupe_key": dedupe_key,
                     "existing": existing,
                     "ai": ai,
                 }
@@ -198,11 +233,23 @@ async def run() -> None:
                 result = await fut
                 if result["status"] in {"empty", "skip"}:
                     continue
+                if result["status"] == "dup":
+                    logger.info(
+                        "Duplicate skip channel=%s message_id=%s split_idx=%s existing_id=%s existing_source=%s/%s",
+                        source_channel,
+                        result["msg"].id,
+                        result["split_idx"],
+                        result.get("existing_duplicate_id"),
+                        result.get("existing_duplicate_channel"),
+                        result.get("existing_duplicate_message_id"),
+                    )
+                    continue
 
                 msg = result["msg"]
                 raw_text = result["raw_text"]
                 split_idx = result["split_idx"]
                 content_hash = result["content_hash"]
+                dedupe_key = result["dedupe_key"]
                 existing = result["existing"]
                 ai = result["ai"]
 
@@ -247,6 +294,7 @@ async def run() -> None:
                     "source_link": source_link,
                     "slug": slug,
                     "content_hash": content_hash,
+                    "dedupe_key": dedupe_key,
                     "is_job": True,
                     "filter_status": "accepted",
                     "filter_reason": ai.get("reason_short") or "ai_relevant",
