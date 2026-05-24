@@ -28,8 +28,32 @@ TELETHON_SESSION_NAME = os.getenv("TELETHON_SESSION_NAME", "telegram_session")
 FETCH_LIMIT = int(os.getenv("FETCH_LIMIT", "30"))
 ENRICHMENT_VERSION = os.getenv("ENRICHMENT_VERSION", "v4_mvp_reset")
 
-# Hard MVP scope: one channel only.
-SOURCE_CHANNELS = ["@bbe_jobs"]
+DEFAULT_SOURCE_CHANNELS = [
+    "@designer_ru_work",
+    "@designer_ru",
+    "@designwork_vacansii",
+    "@young_relocate",
+    "@workinart",
+    "@designbirzha",
+    "@digital_rabota",
+    "@wntddesign",
+    "@vakansii_dizaynerov",
+    "@designhunters",
+    "@mirkreatorovjob",
+    "@mnogovakansiy",
+    "@designoffers",
+    "@job_for_relocation",
+    "@theblueprintcareer",
+]
+
+
+def parse_source_channels() -> list[str]:
+    raw = os.getenv("SOURCE_CHANNELS", "").strip()
+    if raw:
+        channels = [item.strip() for item in raw.split(",") if item.strip()]
+        if channels:
+            return channels
+    return list(DEFAULT_SOURCE_CHANNELS)
 
 
 def validate_env() -> None:
@@ -95,8 +119,9 @@ def should_skip(existing: dict | None, content_hash: str) -> bool:
 async def run() -> None:
     validate_env()
     supabase = make_supabase()
+    source_channels = parse_source_channels()
 
-    logger.info("MVP scope channels=%s", SOURCE_CHANNELS)
+    logger.info("MVP scope channels=%s", source_channels)
 
     async with TelegramClient(TELETHON_SESSION_NAME, TG_API_ID, TG_API_HASH) as client:
         if not await client.is_user_authorized():
@@ -110,7 +135,7 @@ async def run() -> None:
         total_rejected = 0
         total_saved = 0
 
-        for source_channel in SOURCE_CHANNELS:
+        for source_channel in source_channels:
             try:
                 source_entity = await client.get_entity(source_channel)
             except Exception as exc:
@@ -201,7 +226,7 @@ async def run() -> None:
 
         logger.info(
             "Total summary: channels=%s processed=%s rejected=%s saved=%s",
-            len(SOURCE_CHANNELS),
+            len(source_channels),
             total_processed,
             total_rejected,
             total_saved,
