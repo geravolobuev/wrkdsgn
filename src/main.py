@@ -14,6 +14,7 @@ from telethon import TelegramClient
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from job_parser.openrouter_client import enrich_vacancy_with_ai
+from job_parser.job_splitter import split_jobs_from_post
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -152,29 +153,46 @@ async def run() -> None:
             channel_saved = 0
             sem = asyncio.Semaphore(AI_CONCURRENCY)
 
-            async def enrich_candidate(msg):
+            async def enrich_candidate(msg, split_idx: int, split_text: str):
                 raw_text = msg.message.strip()
-                if not raw_text:
+                part_text = split_text.strip()
+                if not raw_text or not part_text:
                     return {"status": "empty"}
 
-                content_hash = hashlib.sha256(f"{source_channel}:{msg.id}:{raw_text}".encode("utf-8")).hexdigest()
+                content_hash = hashlib.sha256(
+                    f"{source_channel}:{msg.id}:{split_idx}:{part_text}".encode("utf-8")
+                ).hexdigest()
                 existing = get_existing_by_hash(supabase, content_hash)
                 if should_skip(existing, content_hash):
                     return {"status": "skip"}
 
                 async with sem:
-                    ai = await asyncio.to_thread(enrich_vacancy_with_ai, raw_text)
+                    ai = await asyncio.to_thread(enrich_vacancy_with_ai, part_text)
 
                 return {
                     "status": "ok",
                     "msg": msg,
-                    "raw_text": raw_text,
+                    "raw_text": part_text,
+                    "split_idx": split_idx,
                     "content_hash": content_hash,
                     "existing": existing,
                     "ai": ai,
                 }
 
-            tasks = [asyncio.create_task(enrich_candidate(msg)) for msg in messages if msg.message]
+            tasks = []
+            for msg in messages:
+                if not msg.message:
+                    continue
+                split_parts = split_jobs_from_post(msg.message)
+                if len(split_parts) > 1:
+                    logger.info(
+                        "Split post channel=%s message_id=%s chunks=%s",
+                        source_channel,
+                        msg.id,
+                        len(split_parts),
+                    )
+                for split_idx, split_text in enumerate(split_parts):
+                    tasks.append(asyncio.create_task(enrich_candidate(msg, split_idx, split_text)))
 
             for fut in asyncio.as_completed(tasks):
                 result = await fut
@@ -183,6 +201,7 @@ async def run() -> None:
 
                 msg = result["msg"]
                 raw_text = result["raw_text"]
+                split_idx = result["split_idx"]
                 content_hash = result["content_hash"]
                 existing = result["existing"]
                 ai = result["ai"]
@@ -212,7 +231,9 @@ async def run() -> None:
 
                 raw_title = extract_raw_title(raw_text)
                 source_link = build_source_url(source_channel, msg.id)
-                slug = slugify(f"{ai.get('role') or raw_title or 'job'}-{source_channel.strip('@')}-{msg.id}-{content_hash[:8]}")
+                slug = slugify(
+                    f"{ai.get('role') or raw_title or 'job'}-{source_channel.strip('@')}-{msg.id}-{split_idx}-{content_hash[:8]}"
+                )
 
                 row = {
                     "source_channel": source_channel,
