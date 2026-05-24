@@ -9,7 +9,7 @@ import requests
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 OLLAMA_DEFAULT_URL = "https://ollama.com/api/chat"
-OLLAMA_DEFAULT_MODEL = "qwen3-coder:480b-cloud"
+OLLAMA_DEFAULT_MODEL = "gemma4:31b"
 MODEL_FALLBACK_CHAIN = [
     "google/gemma-4-31b-it:free",
     "openai/gpt-oss-120b:free",

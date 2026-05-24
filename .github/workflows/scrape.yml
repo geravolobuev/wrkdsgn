@@ -35,6 +35,10 @@ jobs:
           TELETHON_SESSION_NAME: telegram_session
           FETCH_LIMIT: 30
           ENABLE_AI_ENRICHMENT: ${{ secrets.ENABLE_AI_ENRICHMENT }}
+          OLLAMA_ENABLED: ${{ secrets.OLLAMA_ENABLED }}
+          OLLAMA_API_URL: ${{ secrets.OLLAMA_API_URL }}
+          OLLAMA_API_KEY: ${{ secrets.OLLAMA_API_KEY }}
+          OLLAMA_MODEL: ${{ secrets.OLLAMA_MODEL }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL }}
           ENRICHMENT_VERSION: ${{ secrets.ENRICHMENT_VERSION }}
