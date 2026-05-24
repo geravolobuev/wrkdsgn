@@ -310,7 +310,7 @@ async def run() -> None:
                 if existing:
                     supabase.table("vacancies").update(row).eq("id", existing["id"]).execute()
                 else:
-                    supabase.table("vacancies").upsert(row, on_conflict="content_hash", ignore_duplicates=True).execute()
+                    supabase.table("vacancies").upsert(row, on_conflict="dedupe_key", ignore_duplicates=True).execute()
 
                 channel_saved += 1
                 total_saved += 1
