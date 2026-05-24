@@ -9,8 +9,6 @@ from typing import Any
 import requests
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-OLLAMA_DEFAULT_URL = "https://ollama.com/api/chat"
-OLLAMA_DEFAULT_MODEL = "gemma4:31b"
 MODEL_FALLBACK_CHAIN = [
     "openai/gpt-oss-120b:free",
 ]
@@ -164,68 +162,6 @@ def _extract_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
-def _try_ollama(prompt: str, timeout_sec: int, max_retries: int) -> dict[str, Any] | None:
-    model = os.getenv("OLLAMA_MODEL", OLLAMA_DEFAULT_MODEL).strip() or OLLAMA_DEFAULT_MODEL
-    url = os.getenv("OLLAMA_API_URL", OLLAMA_DEFAULT_URL).strip() or OLLAMA_DEFAULT_URL
-    api_key = os.getenv("OLLAMA_API_KEY", "").strip()
-    enabled = os.getenv("OLLAMA_ENABLED", "false").lower() == "true"
-    if not enabled:
-        return None
-
-    headers = {"Content-Type": "application/json"}
-    if api_key:
-        headers["Authorization"] = f"Bearer {api_key}"
-
-    payload = {
-        "model": model,
-        "stream": False,
-        "temperature": 0,
-        "max_tokens": 240,
-        "messages": [
-            {"role": "system", "content": "Return strict JSON only."},
-            {"role": "user", "content": prompt},
-        ],
-    }
-
-    for attempt in range(1, max_retries + 1):
-        try:
-            response = requests.post(url, json=payload, headers=headers, timeout=timeout_sec)
-            if response.status_code >= 400:
-                if response.status_code == 401:
-                    logger.warning(
-                        "Enrichment provider=ollama unauthorized url=%s model=%s hint=check OLLAMA_API_KEY and endpoint",
-                        url,
-                        model,
-                    )
-                logger.warning("Enrichment provider=ollama model=%s api_error=%s attempt=%s", model, response.status_code, attempt)
-                continue
-
-            content = _extract_content_from_response(response.json())
-            if not isinstance(content, str):
-                logger.warning("Enrichment provider=ollama model=%s empty_content attempt=%s", model, attempt)
-                continue
-
-            parsed = _extract_json_object(content)
-            if parsed is None:
-                logger.warning("Enrichment provider=ollama model=%s invalid_json_content", model)
-                continue
-            validated = _validate_payload(parsed)
-            if validated is None:
-                logger.warning("Enrichment provider=ollama model=%s invalid_schema", model)
-                continue
-
-            validated["selected_provider"] = "ollama"
-            validated["selected_model"] = model
-            logger.info("Enrichment success provider=ollama model=%s", model)
-            return validated
-        except (requests.RequestException, json.JSONDecodeError, ValueError, TypeError, KeyError) as exc:
-            logger.warning("Enrichment provider=ollama model=%s failed attempt=%s err=%s", model, attempt, exc)
-            time.sleep(0.2)
-            continue
-
-    return None
-
-
 def _try_openrouter(prompt: str, timeout_sec: int, max_retries: int, api_key: str) -> dict[str, Any] | None:
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -291,12 +227,8 @@ def enrich_vacancy_with_ai(raw_text: str) -> dict[str, Any] | None:
         return None
 
     prompt = _build_prompt(template, raw_text)
-    ollama_result = _try_ollama(prompt=prompt, timeout_sec=timeout_sec, max_retries=max_retries)
-    if ollama_result is not None:
-        return ollama_result
-
     if not openrouter_api_key:
-        logger.warning("OLLAMA failed and OPENROUTER_API_KEY is not set; cannot continue enrichment")
+        logger.warning("OPENROUTER_API_KEY is not set; cannot continue enrichment")
         return None
 
     openrouter_result = _try_openrouter(prompt=prompt, timeout_sec=timeout_sec, max_retries=max_retries, api_key=openrouter_api_key)
