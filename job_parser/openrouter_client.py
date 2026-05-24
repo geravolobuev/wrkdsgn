@@ -1,6 +1,7 @@
 import json
 import logging
 import os
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -34,6 +35,14 @@ def _read_prompt_template() -> str:
     if not prompt_path.exists():
         raise FileNotFoundError(f"Prompt file not found: {prompt_path}")
     return prompt_path.read_text(encoding="utf-8")
+
+
+def _build_prompt(template: str, raw_text: str) -> str:
+    truncated = raw_text[:3000]
+    if "{{VACANCY_TEXT}}" in template:
+        return template.replace("{{VACANCY_TEXT}}", truncated)
+    # Backward-compatible mode: prompt file without explicit placeholder.
+    return f"{template}\n\nVACANCY_TEXT:\n{truncated}"
 
 
 def _safe_text(value: Any, max_len: int = 120) -> str | None:
@@ -127,6 +136,36 @@ def _extract_content_from_response(data: dict[str, Any]) -> str | None:
     return None
 
 
+def _extract_json_object(text: str) -> dict[str, Any] | None:
+    # 1) Direct JSON.
+    try:
+        parsed = json.loads(text)
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        pass
+
+    # 2) JSON inside fenced block.
+    fence = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.DOTALL | re.IGNORECASE)
+    if fence:
+        try:
+            parsed = json.loads(fence.group(1))
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            pass
+
+    # 3) First {...} chunk.
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        chunk = text[start : end + 1]
+        try:
+            parsed = json.loads(chunk)
+            return parsed if isinstance(parsed, dict) else None
+        except Exception:
+            return None
+    return None
+
+
 def _try_ollama(prompt: str, timeout_sec: int, max_retries: int) -> dict[str, Any] | None:
     model = os.getenv("OLLAMA_MODEL", OLLAMA_DEFAULT_MODEL).strip() or OLLAMA_DEFAULT_MODEL
     url = os.getenv("OLLAMA_API_URL", OLLAMA_DEFAULT_URL).strip() or OLLAMA_DEFAULT_URL
@@ -168,7 +207,10 @@ def _try_ollama(prompt: str, timeout_sec: int, max_retries: int) -> dict[str, An
                 logger.warning("Enrichment provider=ollama model=%s empty_content attempt=%s", model, attempt)
                 continue
 
-            parsed = json.loads(content)
+            parsed = _extract_json_object(content)
+            if parsed is None:
+                logger.warning("Enrichment provider=ollama model=%s invalid_json_content", model)
+                continue
             validated = _validate_payload(parsed)
             if validated is None:
                 logger.warning("Enrichment provider=ollama model=%s invalid_schema", model)
@@ -213,7 +255,10 @@ def _try_openrouter(prompt: str, timeout_sec: int, max_retries: int, api_key: st
                 if not isinstance(content, str):
                     continue
 
-                parsed = json.loads(content)
+                parsed = _extract_json_object(content)
+                if parsed is None:
+                    logger.warning("Enrichment provider=openrouter model=%s invalid_json_content", model)
+                    continue
                 validated = _validate_payload(parsed)
                 if validated is None:
                     logger.warning("Enrichment provider=openrouter model=%s invalid_schema", model)
@@ -247,7 +292,7 @@ def enrich_vacancy_with_ai(raw_text: str) -> dict[str, Any] | None:
         logger.error("Cannot read prompt file: %s", exc)
         return None
 
-    prompt = template.replace("{{VACANCY_TEXT}}", raw_text[:3000])
+    prompt = _build_prompt(template, raw_text)
     ollama_result = _try_ollama(prompt=prompt, timeout_sec=timeout_sec, max_retries=max_retries)
     if ollama_result is not None:
         return ollama_result
