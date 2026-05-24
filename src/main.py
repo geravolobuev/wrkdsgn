@@ -44,7 +44,7 @@ def validate_env() -> None:
         raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")
     if os.getenv("ENABLE_AI_ENRICHMENT", "true").lower() != "true":
         raise RuntimeError("ENABLE_AI_ENRICHMENT must be true for current MVP pipeline")
-    has_ollama = os.getenv("OLLAMA_ENABLED", "true").lower() == "true"
+    has_ollama = os.getenv("OLLAMA_ENABLED", "false").lower() == "true"
     has_openrouter = bool(os.getenv("OPENROUTER_API_KEY", "").strip())
     if has_ollama and not os.getenv("OLLAMA_API_KEY", "").strip():
         raise RuntimeError("OLLAMA_ENABLED=true but OLLAMA_API_KEY is empty")
