@@ -26,6 +26,7 @@ SUPABASE_URL = os.getenv("SUPABASE_URL", "")
 SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 TELETHON_SESSION_NAME = os.getenv("TELETHON_SESSION_NAME", "telegram_session")
 FETCH_LIMIT = int(os.getenv("FETCH_LIMIT", "30"))
+AI_CONCURRENCY = max(1, int(os.getenv("AI_CONCURRENCY", "5")))
 ENRICHMENT_VERSION = os.getenv("ENRICHMENT_VERSION", "v4_mvp_reset")
 
 DEFAULT_SOURCE_CHANNELS = [
@@ -121,7 +122,7 @@ async def run() -> None:
     supabase = make_supabase()
     source_channels = parse_source_channels()
 
-    logger.info("MVP scope channels=%s", source_channels)
+    logger.info("MVP scope channels=%s ai_concurrency=%s", source_channels, AI_CONCURRENCY)
 
     async with TelegramClient(TELETHON_SESSION_NAME, TG_API_ID, TG_API_HASH) as client:
         if not await client.is_user_authorized():
@@ -149,19 +150,43 @@ async def run() -> None:
             messages.reverse()
 
             channel_saved = 0
+            sem = asyncio.Semaphore(AI_CONCURRENCY)
 
-            for msg in messages:
+            async def enrich_candidate(msg):
                 raw_text = msg.message.strip()
                 if not raw_text:
-                    continue
+                    return {"status": "empty"}
 
                 content_hash = hashlib.sha256(f"{source_channel}:{msg.id}:{raw_text}".encode("utf-8")).hexdigest()
-
                 existing = get_existing_by_hash(supabase, content_hash)
                 if should_skip(existing, content_hash):
+                    return {"status": "skip"}
+
+                async with sem:
+                    ai = await asyncio.to_thread(enrich_vacancy_with_ai, raw_text)
+
+                return {
+                    "status": "ok",
+                    "msg": msg,
+                    "raw_text": raw_text,
+                    "content_hash": content_hash,
+                    "existing": existing,
+                    "ai": ai,
+                }
+
+            tasks = [asyncio.create_task(enrich_candidate(msg)) for msg in messages if msg.message]
+
+            for fut in asyncio.as_completed(tasks):
+                result = await fut
+                if result["status"] in {"empty", "skip"}:
                     continue
 
-                ai = await asyncio.to_thread(enrich_vacancy_with_ai, raw_text)
+                msg = result["msg"]
+                raw_text = result["raw_text"]
+                content_hash = result["content_hash"]
+                existing = result["existing"]
+                ai = result["ai"]
+
                 if ai is None:
                     total_rejected += 1
                     continue
