@@ -148,7 +148,9 @@ def upsert_vacancy(supabase: Client, row: dict) -> None:
     except APIError as exc:
         payload = getattr(exc, "args", [None])[0]
         code = payload.get("code") if isinstance(payload, dict) else None
-        if code == "42P10":
+        message = payload.get("message") if isinstance(payload, dict) else str(exc)
+        text = f"{code or ''} {message or ''}"
+        if "42P10" in text or "no unique or exclusion constraint matching the ON CONFLICT specification" in text:
             logger.warning(
                 "dedupe_key unique constraint missing in DB, fallback to content_hash upsert (apply migration 20260524_dedupe_key_unique_and_cleanup.sql)"
             )
