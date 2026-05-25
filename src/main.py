@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from dotenv import load_dotenv
+from postgrest.exceptions import APIError
 from supabase import Client, create_client
 from telethon import TelegramClient
 
@@ -139,6 +140,21 @@ def should_skip(existing: dict | None, content_hash: str) -> bool:
         and existing.get("enrichment_version") == ENRICHMENT_VERSION
         and existing.get("enrichment_hash") == content_hash
     )
+
+
+def upsert_vacancy(supabase: Client, row: dict) -> None:
+    try:
+        supabase.table("vacancies").upsert(row, on_conflict="dedupe_key", ignore_duplicates=True).execute()
+    except APIError as exc:
+        payload = getattr(exc, "args", [None])[0]
+        code = payload.get("code") if isinstance(payload, dict) else None
+        if code == "42P10":
+            logger.warning(
+                "dedupe_key unique constraint missing in DB, fallback to content_hash upsert (apply migration 20260524_dedupe_key_unique_and_cleanup.sql)"
+            )
+            supabase.table("vacancies").upsert(row, on_conflict="content_hash", ignore_duplicates=True).execute()
+            return
+        raise
 
 
 async def run() -> None:
@@ -310,7 +326,7 @@ async def run() -> None:
                 if existing:
                     supabase.table("vacancies").update(row).eq("id", existing["id"]).execute()
                 else:
-                    supabase.table("vacancies").upsert(row, on_conflict="dedupe_key", ignore_duplicates=True).execute()
+                    upsert_vacancy(supabase, row)
 
                 channel_saved += 1
                 total_saved += 1
