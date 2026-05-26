@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { getQueryEmbedding } from "@/lib/embeddings";
 import { supabase } from "@/lib/supabase";
 
 const PAGE_SIZE = 20;
@@ -18,20 +19,53 @@ export async function GET(request: NextRequest) {
   const workFormat = (searchParams.get("work_format") || "").trim();
   const employmentType = (searchParams.get("employment_type") || "").trim();
 
+  const baseSelect =
+    "id,title,canonical_title,display_title,description,source_channel,source_link,created_at,published_at,slug,work_format,employment_type,seniority";
+
   let query = supabase
     .from("vacancies")
-    .select(
-      "id,title,canonical_title,display_title,description,source_channel,source_link,created_at,published_at,slug,work_format,employment_type,seniority",
-      { count: "exact" }
-    )
+    .select(baseSelect, { count: "exact" })
     .eq("is_job", true)
     .order("published_at", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false })
     .range(from, to);
 
-  if (q) {
-    query = query.or(`title.ilike.%${q}%,canonical_title.ilike.%${q}%,description.ilike.%${q}%`);
+  const semanticEnabled = (process.env.ENABLE_SEMANTIC_SEARCH || "false").toLowerCase() === "true";
+
+  if (q && semanticEnabled) {
+    const embeddingResult = await getQueryEmbedding(q);
+    if (embeddingResult) {
+      const { data: semRows, error: semErr } = await supabase.rpc("semantic_search_vacancies", {
+        query_embedding: embeddingResult.embedding,
+        query_model: embeddingResult.model,
+        limit_count: 200,
+      });
+      if (!semErr && semRows && semRows.length > 0) {
+        const ids = semRows.map((row: { vacancy_id: number }) => row.vacancy_id).filter(Boolean);
+        if (ids.length > 0) {
+          let semQuery = supabase.from("vacancies").select(baseSelect).eq("is_job", true).in("id", ids);
+          if (specialization) semQuery = semQuery.eq("canonical_title", specialization);
+          if (seniority) semQuery = semQuery.eq("seniority", seniority);
+          if (workFormat) semQuery = semQuery.eq("work_format", workFormat);
+          if (employmentType) semQuery = semQuery.eq("employment_type", employmentType);
+
+          const { data: semJobs, error: semJobsErr } = await semQuery;
+          if (!semJobsErr && semJobs) {
+            const rank = new Map<number, number>();
+            ids.forEach((id, idx) => rank.set(id, idx));
+            const ordered = [...semJobs].sort((a, b) => (rank.get(a.id) ?? 10_000) - (rank.get(b.id) ?? 10_000));
+            const start = from;
+            const end = to + 1;
+            const jobs = ordered.slice(start, end);
+            const hasMore = ordered.length > end;
+            return NextResponse.json({ jobs, page: safePage, hasMore });
+          }
+        }
+      }
+    }
   }
+
+  if (q) query = query.or(`title.ilike.%${q}%,canonical_title.ilike.%${q}%,description.ilike.%${q}%`);
 
   if (specialization) query = query.eq("canonical_title", specialization);
   if (seniority) query = query.eq("seniority", seniority);

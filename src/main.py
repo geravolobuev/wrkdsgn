@@ -14,6 +14,7 @@ from telethon import TelegramClient
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
+from job_parser.embedding_client import get_text_embedding
 from job_parser.openrouter_client import enrich_vacancy_with_ai
 from job_parser.job_splitter import split_jobs_from_post
 
@@ -155,6 +156,39 @@ def upsert_vacancy(supabase: Client, row: dict) -> None:
                 "dedupe_key unique constraint missing in DB, fallback to content_hash upsert (apply migration 20260524_dedupe_key_unique_and_cleanup.sql)"
             )
             supabase.table("vacancies").upsert(row, on_conflict="content_hash", ignore_duplicates=True).execute()
+            return
+        raise
+
+
+def get_vacancy_id(supabase: Client, content_hash: str) -> int | None:
+    row = get_existing_by_hash(supabase, content_hash)
+    if row and row.get("id") is not None:
+        return int(row["id"])
+    return None
+
+
+def upsert_vacancy_embedding(supabase: Client, vacancy_id: int, source_text: str) -> None:
+    embedding_payload = get_text_embedding(source_text)
+    if embedding_payload is None:
+        return
+    embedding, embedding_model = embedding_payload
+    try:
+        supabase.table("vacancy_embeddings").upsert(
+            {
+                "vacancy_id": vacancy_id,
+                "embedding_model": embedding_model,
+                "embedding": embedding,
+                "source_text": source_text[:2500],
+            },
+            on_conflict="vacancy_id",
+            ignore_duplicates=False,
+        ).execute()
+    except APIError as exc:
+        payload = getattr(exc, "args", [None])[0]
+        code = payload.get("code") if isinstance(payload, dict) else None
+        # Table/migration not yet applied: do not break scrape.
+        if code in {"42P01", "42703"}:
+            logger.warning("vacancy_embeddings table not ready, skip semantic indexing")
             return
         raise
 
@@ -327,8 +361,12 @@ async def run() -> None:
 
                 if existing:
                     supabase.table("vacancies").update(row).eq("id", existing["id"]).execute()
+                    vacancy_id = int(existing["id"])
                 else:
                     upsert_vacancy(supabase, row)
+                    vacancy_id = get_vacancy_id(supabase, content_hash)
+                if vacancy_id:
+                    upsert_vacancy_embedding(supabase, vacancy_id, raw_text)
 
                 channel_saved += 1
                 total_saved += 1
