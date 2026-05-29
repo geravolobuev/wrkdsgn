@@ -67,7 +67,7 @@ export async function GET(request: NextRequest) {
           }
           if (!semJobsErr && semJobs) {
             const rank = new Map<number, number>();
-            ids.forEach((id, idx) => rank.set(id, idx));
+            ids.forEach((id: number, idx: number) => rank.set(id, idx));
             const ordered = [...semJobs].sort((a, b) => (rank.get(a.id) ?? 10_000) - (rank.get(b.id) ?? 10_000));
             const start = from;
             const end = to + 1;
