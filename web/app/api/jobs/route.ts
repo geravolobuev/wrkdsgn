@@ -31,16 +31,28 @@ export async function GET(request: NextRequest) {
     .range(from, to);
 
   const semanticEnabled = (process.env.ENABLE_SEMANTIC_SEARCH || "false").toLowerCase() === "true";
+  let mode: "semantic" | "fallback_text" = "fallback_text";
+  const debug: Record<string, string | number | boolean> = {
+    semantic_enabled: semanticEnabled,
+  };
 
   if (q && semanticEnabled) {
     const embeddingResult = await getQueryEmbedding(q);
+    if (!embeddingResult) {
+      debug.semantic_reason = "embedding_unavailable";
+    }
     if (embeddingResult) {
+      debug.embedding_model = embeddingResult.model;
       const { data: semRows, error: semErr } = await supabase.rpc("semantic_search_vacancies", {
         query_embedding: embeddingResult.embedding,
         query_model: embeddingResult.model,
         limit_count: 200,
       });
+      if (semErr) {
+        debug.semantic_reason = "rpc_error";
+      }
       if (!semErr && semRows && semRows.length > 0) {
+        debug.semantic_candidates = semRows.length;
         const ids = semRows.map((row: { vacancy_id: number }) => row.vacancy_id).filter(Boolean);
         if (ids.length > 0) {
           let semQuery = supabase.from("vacancies").select(baseSelect).eq("is_job", true).in("id", ids);
@@ -50,6 +62,9 @@ export async function GET(request: NextRequest) {
           if (employmentType) semQuery = semQuery.eq("employment_type", employmentType);
 
           const { data: semJobs, error: semJobsErr } = await semQuery;
+          if (semJobsErr) {
+            debug.semantic_reason = "semantic_select_error";
+          }
           if (!semJobsErr && semJobs) {
             const rank = new Map<number, number>();
             ids.forEach((id, idx) => rank.set(id, idx));
@@ -58,11 +73,16 @@ export async function GET(request: NextRequest) {
             const end = to + 1;
             const jobs = ordered.slice(start, end);
             const hasMore = ordered.length > end;
-            return NextResponse.json({ jobs, page: safePage, hasMore });
+            mode = "semantic";
+            return NextResponse.json({ jobs, page: safePage, hasMore, mode, debug });
           }
         }
+      } else if (!semErr) {
+        debug.semantic_reason = "no_semantic_rows";
       }
     }
+  } else if (q) {
+    debug.semantic_reason = semanticEnabled ? "no_query" : "semantic_disabled";
   }
 
   if (q) query = query.or(`title.ilike.%${q}%,canonical_title.ilike.%${q}%,description.ilike.%${q}%`);
@@ -77,5 +97,5 @@ export async function GET(request: NextRequest) {
 
   const jobs = data || [];
   const hasMore = typeof count === "number" ? to + 1 < count : jobs.length === PAGE_SIZE;
-  return NextResponse.json({ jobs, page: safePage, hasMore });
+  return NextResponse.json({ jobs, page: safePage, hasMore, mode, debug });
 }
