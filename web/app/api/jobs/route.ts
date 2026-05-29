@@ -5,6 +5,31 @@ import { supabase } from "@/lib/supabase";
 
 const PAGE_SIZE = 20;
 
+function detectRoleIntent(query: string): string | null {
+  const q = query.toLowerCase();
+  const rules: Array<{ role: string; patterns: RegExp[] }> = [
+    { role: "Art Director", patterns: [/\bart\s*director\b/i, /арт[\s-]?директор/i] },
+    { role: "Creative Director", patterns: [/\bcreative\s*director\b/i, /креативн\w*\s*директор/i] },
+    { role: "Design Director", patterns: [/\bdesign\s*director\b/i, /дизайн\w*\s*директор/i] },
+    { role: "Design Manager", patterns: [/\bdesign\s*manager\b/i, /дизайн\w*\s*менеджер/i] },
+    { role: "Presentation Designer", patterns: [/presentation\s*designer/i, /дизайнер\w*\s*презентац/i] },
+    { role: "Communication Designer", patterns: [/communication\s*designer/i, /коммуникационн\w*\s*дизайнер/i] },
+    { role: "Motion Designer", patterns: [/motion\s*designer/i, /моушн\w*\s*дизайнер/i] },
+    { role: "3D Designer", patterns: [/\b3d\s*designer\b/i, /\b3d\b/i, /3д/i] },
+    { role: "Web Designer", patterns: [/\bweb\s*designer\b/i, /веб\w*\s*дизайнер/i] },
+    { role: "UI Designer", patterns: [/\bui\s*designer\b/i, /\bui\b/i, /интерфейс\w*\s*дизайнер/i] },
+    { role: "Brand Designer", patterns: [/\bbrand\s*designer\b/i, /бренд\w*\s*дизайнер/i] },
+    { role: "Visual Designer", patterns: [/\bvisual\s*designer\b/i, /визуальн\w*\s*дизайнер/i] },
+    { role: "Graphic Designer", patterns: [/\bgraphic\s*designer\b/i, /графическ\w*\s*дизайнер/i] },
+    { role: "Illustrator", patterns: [/\billustrator\b/i, /иллюстратор/i] },
+    { role: "Type Designer", patterns: [/\btype\s*designer\b/i, /шрифт\w*\s*дизайнер/i] },
+  ];
+  for (const rule of rules) {
+    if (rule.patterns.some((p) => p.test(q))) return rule.role;
+  }
+  return null;
+}
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
 
@@ -18,6 +43,8 @@ export async function GET(request: NextRequest) {
   const seniority = (searchParams.get("seniority") || "").trim();
   const workFormat = (searchParams.get("work_format") || "").trim();
   const employmentType = (searchParams.get("employment_type") || "").trim();
+  const roleIntent = q ? detectRoleIntent(q) : null;
+  const effectiveSpecialization = specialization || roleIntent || "";
 
   const baseSelect =
     "id,title,canonical_title,display_title,description,source_channel,source_link,created_at,published_at,slug,work_format,employment_type,seniority";
@@ -35,6 +62,7 @@ export async function GET(request: NextRequest) {
   const debug: Record<string, string | number | boolean> = {
     semantic_enabled: semanticEnabled,
   };
+  if (roleIntent) debug.role_intent = roleIntent;
 
   if (q && semanticEnabled) {
     const embeddingResult = await getQueryEmbedding(q);
@@ -56,7 +84,7 @@ export async function GET(request: NextRequest) {
         const ids = semRows.map((row: { vacancy_id: number }) => row.vacancy_id).filter(Boolean);
         if (ids.length > 0) {
           let semQuery = supabase.from("vacancies").select(baseSelect).eq("is_job", true).in("id", ids);
-          if (specialization) semQuery = semQuery.eq("canonical_title", specialization);
+          if (effectiveSpecialization) semQuery = semQuery.eq("canonical_title", effectiveSpecialization);
           if (seniority) semQuery = semQuery.eq("seniority", seniority);
           if (workFormat) semQuery = semQuery.eq("work_format", workFormat);
           if (employmentType) semQuery = semQuery.eq("employment_type", employmentType);
@@ -87,7 +115,7 @@ export async function GET(request: NextRequest) {
 
   if (q) query = query.or(`title.ilike.%${q}%,canonical_title.ilike.%${q}%,description.ilike.%${q}%`);
 
-  if (specialization) query = query.eq("canonical_title", specialization);
+  if (effectiveSpecialization) query = query.eq("canonical_title", effectiveSpecialization);
   if (seniority) query = query.eq("seniority", seniority);
   if (workFormat) query = query.eq("work_format", workFormat);
   if (employmentType) query = query.eq("employment_type", employmentType);
