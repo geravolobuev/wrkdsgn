@@ -9,6 +9,11 @@ type SearchJob = {
   source_channel: string;
 };
 
+export type SearchIntent = {
+  intentSummary: string | null;
+  expandedQueries: string[];
+};
+
 function extractJsonObject(text: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(text);
@@ -157,5 +162,56 @@ export async function rerankByIntent(query: string, jobs: SearchJob[]): Promise<
     };
   } catch {
     return { orderedIds: null, intentSummary: null, reason: "request_failed", scored: null };
+  }
+}
+
+export async function expandSearchIntent(query: string): Promise<SearchIntent> {
+  const apiKey = (process.env.OPENROUTER_API_KEY || "").trim();
+  if (!apiKey || !query.trim()) return { intentSummary: null, expandedQueries: [] };
+
+  const model = (process.env.OPENROUTER_SEARCH_MODEL || "openai/gpt-oss-120b:free").trim();
+  const prompt = [
+    "You normalize user job-search intent across languages.",
+    "Return ONLY JSON:",
+    `{"intent_summary":"...", "expanded_queries":["...", "..."]}`,
+    "Rules:",
+    "- expanded_queries must contain 3-8 short semantically equivalent query variants.",
+    "- Include cross-language variants when useful (e.g. Russian + English).",
+    "- No explanations, no markdown.",
+    `USER_QUERY: ${query}`,
+  ].join("\n");
+
+  try {
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model,
+        temperature: 0,
+        max_tokens: 300,
+        messages: [
+          { role: "system", content: "Return strict JSON only." },
+          { role: "user", content: prompt },
+        ],
+      }),
+    });
+    if (!response.ok) return { intentSummary: null, expandedQueries: [] };
+    const json = (await response.json()) as { choices?: Array<{ message?: { content?: string } }> };
+    const content = json.choices?.[0]?.message?.content;
+    if (!content) return { intentSummary: null, expandedQueries: [] };
+    const parsed = extractJsonObject(content);
+    if (!parsed) return { intentSummary: null, expandedQueries: [] };
+    const expanded = Array.isArray(parsed.expanded_queries)
+      ? parsed.expanded_queries.filter((x): x is string => typeof x === "string").map((x) => x.trim()).filter(Boolean)
+      : [];
+    return {
+      intentSummary: typeof parsed.intent_summary === "string" ? parsed.intent_summary.slice(0, 200) : null,
+      expandedQueries: expanded.slice(0, 8),
+    };
+  } catch {
+    return { intentSummary: null, expandedQueries: [] };
   }
 }
