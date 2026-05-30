@@ -5,6 +5,7 @@ import { rerankByIntent } from "@/lib/search-intent";
 import { supabase } from "@/lib/supabase";
 
 const PAGE_SIZE = 20;
+const DEFAULT_MIN_RELEVANCE = 60;
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -82,6 +83,36 @@ export async function GET(request: NextRequest) {
                 ordered = [...ordered].sort((a, b) => (rr.get(a.id) ?? 10_000) - (rr.get(b.id) ?? 10_000));
                 debug.rerank_reason = rerank.reason || "ok";
                 if (rerank.intentSummary) debug.intent_summary = rerank.intentSummary;
+
+                if (rerank.scored?.length) {
+                  const scoredMap = new Map<number, { score: number; explanation: string; isRelevant: boolean }>();
+                  rerank.scored.forEach((r) =>
+                    scoredMap.set(r.id, { score: r.score, explanation: r.explanation, isRelevant: r.isRelevant })
+                  );
+
+                  const thresholdRaw = Number(process.env.SEARCH_MIN_RELEVANCE_SCORE || `${DEFAULT_MIN_RELEVANCE}`);
+                  const threshold = Number.isFinite(thresholdRaw) ? thresholdRaw : DEFAULT_MIN_RELEVANCE;
+                  debug.min_relevance_score = threshold;
+
+                  const relevantOnly = ordered.filter((job) => scoredMap.get(job.id)?.isRelevant === true);
+                  const byScore = relevantOnly.filter((job) => (scoredMap.get(job.id)?.score ?? 0) >= threshold);
+                  const filtered = byScore.length > 0 ? byScore : relevantOnly;
+                  if (filtered.length > 0) {
+                    ordered = filtered;
+                    debug.relevance_filter = "applied";
+                  } else {
+                    debug.relevance_filter = "skipped_empty_after_filter";
+                  }
+
+                  ordered = ordered.map((job) => {
+                    const scored = scoredMap.get(job.id);
+                    return {
+                      ...job,
+                      relevance_score: scored?.score ?? null,
+                      relevance_explanation: scored?.explanation ?? null,
+                    };
+                  });
+                }
               } else {
                 debug.rerank_reason = rerank.reason || "rerank_unavailable";
               }
