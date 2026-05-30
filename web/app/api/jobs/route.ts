@@ -6,6 +6,40 @@ import { supabase } from "@/lib/supabase";
 
 const PAGE_SIZE = 20;
 const DEFAULT_MIN_RELEVANCE = 60;
+const ROLE_QUERY_LIMIT = 500;
+
+const ROLE_ALIASES: Array<{ canonical: string; aliases: string[] }> = [
+  { canonical: "Art Director", aliases: ["art director", "арт директор", "арт-директор", "creative lead"] },
+  { canonical: "Creative Director", aliases: ["creative director", "креативный директор", "креатив-директор"] },
+  { canonical: "Design Director", aliases: ["design director", "директор дизайна"] },
+  { canonical: "Design Manager", aliases: ["design manager", "руководитель дизайна", "head of design", "дизайн менеджер"] },
+  { canonical: "Brand Designer", aliases: ["brand designer", "бренд дизайнер", "бренд-дизайнер", "branding designer"] },
+  { canonical: "Graphic Designer", aliases: ["graphic designer", "графический дизайнер", "граф дизайнер", "графдизайнер"] },
+  { canonical: "Motion Designer", aliases: ["motion designer", "моушн дизайнер", "моушен дизайнер", "motion"] },
+  { canonical: "3D Designer", aliases: ["3d designer", "3д дизайнер", "3d artist", "3д артист"] },
+  { canonical: "Web Designer", aliases: ["web designer", "веб дизайнер", "веб-дизайнер"] },
+  { canonical: "UI Designer", aliases: ["ui designer", "интерфейсный дизайнер", "визуальный интерфейс"] },
+  { canonical: "Illustrator", aliases: ["illustrator", "иллюстратор"] },
+  { canonical: "Type Designer", aliases: ["type designer", "шрифтовой дизайнер", "типограф"] },
+  { canonical: "Presentation Designer", aliases: ["presentation designer", "дизайнер презентаций"] },
+  { canonical: "Communication Designer", aliases: ["communication designer", "коммуникационный дизайнер"] },
+  { canonical: "Visual Designer", aliases: ["visual designer", "визуальный дизайнер"] },
+];
+
+function normalizeQuery(input: string): string {
+  return input
+    .toLowerCase()
+    .replace(/ё/g, "е")
+    .replace(/[^\p{L}\p{N}\s-]+/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function inferCanonicalRolesFromQuery(rawQuery: string): string[] {
+  const q = normalizeQuery(rawQuery);
+  if (!q) return [];
+  return ROLE_ALIASES.filter((r) => r.aliases.some((a) => q.includes(normalizeQuery(a)))).map((r) => r.canonical);
+}
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
@@ -39,7 +73,9 @@ export async function GET(request: NextRequest) {
     semantic_enabled: semanticEnabled,
   };
   const rerankEnabled = (process.env.ENABLE_AI_RERANK || "true").toLowerCase() === "true";
+  const inferredRoles = q ? inferCanonicalRolesFromQuery(q) : [];
   if (q) debug.ai_rerank_enabled = rerankEnabled;
+  if (inferredRoles.length) debug.inferred_roles = inferredRoles.join(", ");
 
   if (q && semanticEnabled) {
     const embeddingResult = await getQueryEmbedding(q);
@@ -58,7 +94,23 @@ export async function GET(request: NextRequest) {
       }
       if (!semErr && semRows && semRows.length > 0) {
         debug.semantic_candidates = semRows.length;
-        const ids = semRows.map((row: { vacancy_id: number }) => row.vacancy_id).filter(Boolean);
+        const semanticIds = semRows.map((row: { vacancy_id: number }) => row.vacancy_id).filter(Boolean);
+        let roleIds: number[] = [];
+
+        if (inferredRoles.length > 0) {
+          const { data: roleRows, error: roleErr } = await supabase
+            .from("vacancies")
+            .select("id")
+            .eq("is_job", true)
+            .in("canonical_title", inferredRoles)
+            .limit(ROLE_QUERY_LIMIT);
+          if (!roleErr && roleRows) {
+            roleIds = roleRows.map((r: { id: number }) => r.id).filter(Boolean);
+            debug.role_match_candidates = roleIds.length;
+          }
+        }
+
+        const ids = [...roleIds, ...semanticIds.filter((id) => !roleIds.includes(id))];
         if (ids.length > 0) {
           let semQuery = supabase.from("vacancies").select(baseSelect).eq("is_job", true).in("id", ids);
           if (effectiveSpecialization) semQuery = semQuery.eq("canonical_title", effectiveSpecialization);
@@ -104,6 +156,16 @@ export async function GET(request: NextRequest) {
                     debug.relevance_filter = "skipped_empty_after_filter";
                   }
 
+                  // For explicit role queries (e.g. art director / арт директор), never drop role-matched rows.
+                  if (inferredRoles.length > 0 && roleIds.length > 0) {
+                    const roleSet = new Set(roleIds);
+                    const roleBackfill = semJobs.filter((j) => roleSet.has(j.id) && !ordered.some((x) => x.id === j.id));
+                    if (roleBackfill.length) {
+                      ordered = [...ordered, ...roleBackfill];
+                      debug.role_backfill = roleBackfill.length;
+                    }
+                  }
+
                   ordered = ordered.map((job) => {
                     const scored = scoredMap.get(job.id);
                     return {
@@ -135,6 +197,10 @@ export async function GET(request: NextRequest) {
   }
 
   if (q) query = query.or(`title.ilike.%${q}%,canonical_title.ilike.%${q}%,description.ilike.%${q}%`);
+
+  if (q && inferredRoles.length > 0) {
+    query = query.in("canonical_title", inferredRoles);
+  }
 
   if (effectiveSpecialization) query = query.eq("canonical_title", effectiveSpecialization);
   if (seniority) query = query.eq("seniority", seniority);
