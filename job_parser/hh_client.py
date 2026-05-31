@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 HH_API_URL = "https://api.hh.ru/vacancies"
 HH_SOURCE_CHANNEL = "hh.ru"
 HH_PER_PAGE = 50
+HH_HARD_MAX_WORKERS = 2
 
 
 def _env_int(name: str, default: int) -> int:
@@ -372,13 +373,19 @@ def _fetch_hh_query(
     return collected
 
 
+def _is_forbidden_error(exc: requests.RequestException) -> bool:
+    response = getattr(exc, "response", None)
+    return response is not None and response.status_code == 403
+
+
 def fetch_hh_vacancies() -> list[dict[str, Any]]:
     if os.getenv("HH_ENABLED", "false").lower() != "true":
         return []
 
     max_pages = max(1, _env_int("HH_MAX_PAGES", 10))
     per_page = min(HH_PER_PAGE, max(1, _env_int("HH_PER_PAGE", HH_PER_PAGE)))
-    max_workers = max(1, _env_int("HH_MAX_WORKERS", 4))
+    requested_workers = max(1, _env_int("HH_MAX_WORKERS", 4))
+    max_workers = min(requested_workers, HH_HARD_MAX_WORKERS)
     user_agent = os.getenv("HH_USER_AGENT", "wrkdsgn/1.0 (hello@wrkdsgn.vercel.app)")
     timeout = _env_int("HH_TIMEOUT", 20)
     request_pause_seconds = max(0.0, _env_float("HH_REQUEST_PAUSE_SECONDS", 0.3))
@@ -394,6 +401,7 @@ def fetch_hh_vacancies() -> list[dict[str, Any]]:
     )
 
     unique: dict[int, dict[str, Any]] = {}
+    forbidden_errors = 0
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
             executor.submit(
@@ -414,7 +422,16 @@ def fetch_hh_vacancies() -> list[dict[str, Any]]:
                     if vacancy_id not in unique:
                         unique[vacancy_id] = normalize_hh_vacancy(payload)
             except requests.RequestException as exc:
+                if _is_forbidden_error(exc):
+                    forbidden_errors += 1
                 logger.warning("HH fetch failed: %s", exc)
+
+    if forbidden_errors == len(HH_SEARCH_PHRASES) and not unique:
+        logger.warning(
+            "HH appears globally forbidden for current runner/profile: forbidden_errors=%s phrases=%s",
+            forbidden_errors,
+            len(HH_SEARCH_PHRASES),
+        )
 
     filtered: list[dict[str, Any]] = []
     rejected = 0
