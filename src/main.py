@@ -15,6 +15,7 @@ from telethon import TelegramClient
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
 from job_parser.embedding_client import get_text_embedding
+from job_parser.hh_client import fetch_hh_vacancies
 from job_parser.openrouter_client import enrich_vacancy_with_ai
 from job_parser.job_splitter import split_jobs_from_post
 
@@ -31,6 +32,7 @@ TELETHON_SESSION_NAME = os.getenv("TELETHON_SESSION_NAME", "telegram_session")
 FETCH_LIMIT = int(os.getenv("FETCH_LIMIT", "30"))
 AI_CONCURRENCY = max(1, int(os.getenv("AI_CONCURRENCY", "5")))
 ENRICHMENT_VERSION = os.getenv("ENRICHMENT_VERSION", "v4_mvp_reset")
+HH_SOURCE_LABEL = "hh.ru"
 
 DEFAULT_SOURCE_CHANNELS = [
     "@designer_ru_work",
@@ -49,6 +51,10 @@ DEFAULT_SOURCE_CHANNELS = [
     "@job_for_relocation",
     "@theblueprintcareer",
 ]
+
+
+def hh_enabled() -> bool:
+    return os.getenv("HH_ENABLED", "false").lower() == "true"
 
 
 def parse_source_channels() -> list[str]:
@@ -227,7 +233,7 @@ async def run() -> None:
     refresh_recent_vacancy_statuses(supabase)
     source_channels = parse_source_channels()
 
-    logger.info("MVP scope channels=%s ai_concurrency=%s", source_channels, AI_CONCURRENCY)
+    logger.info("MVP scope channels=%s hh_enabled=%s ai_concurrency=%s", source_channels, hh_enabled(), AI_CONCURRENCY)
 
     async with TelegramClient(TELETHON_SESSION_NAME, TG_API_ID, TG_API_HASH) as client:
         if not await client.is_user_authorized():
@@ -240,75 +246,63 @@ async def run() -> None:
         total_processed = 0
         total_rejected = 0
         total_saved = 0
+        processed_sources = 0
+        sem = asyncio.Semaphore(AI_CONCURRENCY)
 
-        for source_channel in source_channels:
-            try:
-                source_entity = await client.get_entity(source_channel)
-            except Exception as exc:
-                logger.warning("Skip channel %s: cannot resolve (%s)", source_channel, exc)
-                continue
+        async def enrich_candidate(
+            *,
+            source_channel: str,
+            source_message_id: int,
+            raw_text: str,
+            split_idx: int,
+            source_link: str | None,
+            published_at,
+            raw_title: str | None,
+        ):
+            part_text = raw_text.strip()
+            if not part_text:
+                return {"status": "empty"}
 
-            messages = []
-            async for message in client.iter_messages(source_entity, limit=FETCH_LIMIT):
-                if message.message:
-                    messages.append(message)
-            messages.reverse()
-
-            channel_saved = 0
-            sem = asyncio.Semaphore(AI_CONCURRENCY)
-
-            async def enrich_candidate(msg, split_idx: int, split_text: str):
-                raw_text = msg.message.strip()
-                part_text = split_text.strip()
-                if not raw_text or not part_text:
-                    return {"status": "empty"}
-
-                content_hash = hashlib.sha256(
-                    f"{source_channel}:{msg.id}:{split_idx}:{part_text}".encode("utf-8")
-                ).hexdigest()
-                existing = get_existing_by_hash(supabase, content_hash)
-                if should_skip(existing, content_hash):
-                    return {"status": "skip"}
-                dedupe_key = make_dedupe_key(part_text)
-                existing_duplicate = get_existing_by_dedupe_key(supabase, dedupe_key)
-                if existing_duplicate:
-                    return {
-                        "status": "dup",
-                        "msg": msg,
-                        "split_idx": split_idx,
-                        "existing_duplicate_id": existing_duplicate.get("id"),
-                        "existing_duplicate_channel": existing_duplicate.get("source_channel"),
-                        "existing_duplicate_message_id": existing_duplicate.get("source_message_id"),
-                    }
-
-                async with sem:
-                    ai = await asyncio.to_thread(enrich_vacancy_with_ai, part_text)
-
+            content_hash = hashlib.sha256(
+                f"{source_channel}:{source_message_id}:{split_idx}:{part_text}".encode("utf-8")
+            ).hexdigest()
+            existing = get_existing_by_hash(supabase, content_hash)
+            if should_skip(existing, content_hash):
+                return {"status": "skip"}
+            dedupe_key = make_dedupe_key(part_text)
+            existing_duplicate = get_existing_by_dedupe_key(supabase, dedupe_key)
+            if existing_duplicate:
                 return {
-                    "status": "ok",
-                    "msg": msg,
-                    "raw_text": part_text,
+                    "status": "dup",
+                    "source_channel": source_channel,
+                    "source_message_id": source_message_id,
                     "split_idx": split_idx,
-                    "content_hash": content_hash,
-                    "dedupe_key": dedupe_key,
-                    "existing": existing,
-                    "ai": ai,
+                    "existing_duplicate_id": existing_duplicate.get("id"),
+                    "existing_duplicate_channel": existing_duplicate.get("source_channel"),
+                    "existing_duplicate_message_id": existing_duplicate.get("source_message_id"),
                 }
 
-            tasks = []
-            for msg in messages:
-                if not msg.message:
-                    continue
-                split_parts = split_jobs_from_post(msg.message)
-                if len(split_parts) > 1:
-                    logger.info(
-                        "Split post channel=%s message_id=%s chunks=%s",
-                        source_channel,
-                        msg.id,
-                        len(split_parts),
-                    )
-                for split_idx, split_text in enumerate(split_parts):
-                    tasks.append(asyncio.create_task(enrich_candidate(msg, split_idx, split_text)))
+            async with sem:
+                ai = await asyncio.to_thread(enrich_vacancy_with_ai, part_text)
+
+            return {
+                "status": "ok",
+                "source_channel": source_channel,
+                "source_message_id": source_message_id,
+                "published_at": published_at,
+                "raw_text": part_text,
+                "raw_title": raw_title,
+                "split_idx": split_idx,
+                "source_link": source_link,
+                "content_hash": content_hash,
+                "dedupe_key": dedupe_key,
+                "existing": existing,
+                "ai": ai,
+            }
+
+        async def process_tasks(source_label: str, processed_count: int, tasks: list[asyncio.Task]) -> tuple[int, int]:
+            source_saved = 0
+            source_rejected = 0
 
             for fut in asyncio.as_completed(tasks):
                 result = await fut
@@ -317,8 +311,8 @@ async def run() -> None:
                 if result["status"] == "dup":
                     logger.info(
                         "Duplicate skip channel=%s message_id=%s split_idx=%s existing_id=%s existing_source=%s/%s",
-                        source_channel,
-                        result["msg"].id,
+                        result["source_channel"],
+                        result["source_message_id"],
                         result["split_idx"],
                         result.get("existing_duplicate_id"),
                         result.get("existing_duplicate_channel"),
@@ -326,16 +320,20 @@ async def run() -> None:
                     )
                     continue
 
-                msg = result["msg"]
+                candidate_source_channel = result["source_channel"]
+                candidate_source_message_id = result["source_message_id"]
+                published_at = result["published_at"]
                 raw_text = result["raw_text"]
+                raw_title = result["raw_title"]
                 split_idx = result["split_idx"]
+                source_link = result["source_link"]
                 content_hash = result["content_hash"]
                 dedupe_key = result["dedupe_key"]
                 existing = result["existing"]
                 ai = result["ai"]
 
                 if ai is None:
-                    total_rejected += 1
+                    source_rejected += 1
                     continue
 
                 is_ad = bool(ai.get("is_ad"))
@@ -345,8 +343,8 @@ async def run() -> None:
 
                 logger.info(
                     "AI filter channel=%s message_id=%s is_ad=%s is_job_post=%s is_relevant=%s is_job=%s",
-                    source_channel,
-                    msg.id,
+                    candidate_source_channel,
+                    candidate_source_message_id,
                     is_ad,
                     is_job_post,
                     is_relevant,
@@ -354,19 +352,17 @@ async def run() -> None:
                 )
 
                 if not is_job:
-                    total_rejected += 1
+                    source_rejected += 1
                     continue
 
-                raw_title = extract_raw_title(raw_text)
-                source_link = build_source_url(source_channel, msg.id)
                 slug = slugify(
-                    f"{ai.get('role') or raw_title or 'job'}-{source_channel.strip('@')}-{msg.id}-{split_idx}-{content_hash[:8]}"
+                    f"{ai.get('role') or raw_title or 'job'}-{candidate_source_channel.strip('@')}-{candidate_source_message_id}-{split_idx}-{content_hash[:8]}"
                 )
 
                 row = {
-                    "source_channel": source_channel,
-                    "source_message_id": msg.id,
-                    "published_at": to_iso(msg.date) or datetime.now(timezone.utc).isoformat(),
+                    "source_channel": candidate_source_channel,
+                    "source_message_id": candidate_source_message_id,
+                    "published_at": to_iso(published_at) or datetime.now(timezone.utc).isoformat(),
                     "raw_text": raw_text,
                     "title": ai.get("role") or raw_title,
                     "canonical_title": ai.get("role"),
@@ -383,7 +379,7 @@ async def run() -> None:
                     "seniority": ai.get("grade"),
                     "employment_type": ai.get("employment_type"),
                     "work_format": ai.get("work_format"),
-                    "status": derive_vacancy_status(msg.date),
+                    "status": derive_vacancy_status(published_at),
                     "enriched_at": datetime.now(timezone.utc).isoformat(),
                     "enrichment_version": ENRICHMENT_VERSION,
                     "enrichment_hash": content_hash,
@@ -398,15 +394,88 @@ async def run() -> None:
                 if vacancy_id:
                     upsert_vacancy_embedding(supabase, vacancy_id, raw_text)
 
-                channel_saved += 1
-                total_saved += 1
+                source_saved += 1
 
+            logger.info(
+                "Source summary %s: processed=%s rejected=%s saved=%s",
+                source_label,
+                processed_count,
+                source_rejected,
+                source_saved,
+            )
+            return source_saved, source_rejected
+
+        for source_channel in source_channels:
+            try:
+                source_entity = await client.get_entity(source_channel)
+            except Exception as exc:
+                logger.warning("Skip channel %s: cannot resolve (%s)", source_channel, exc)
+                continue
+
+            messages = []
+            async for message in client.iter_messages(source_entity, limit=FETCH_LIMIT):
+                if message.message:
+                    messages.append(message)
+            messages.reverse()
+
+            tasks = []
+            for msg in messages:
+                if not msg.message:
+                    continue
+                split_parts = split_jobs_from_post(msg.message)
+                if len(split_parts) > 1:
+                    logger.info(
+                        "Split post channel=%s message_id=%s chunks=%s",
+                        source_channel,
+                        msg.id,
+                        len(split_parts),
+                    )
+                for split_idx, split_text in enumerate(split_parts):
+                    tasks.append(
+                        asyncio.create_task(
+                            enrich_candidate(
+                                source_channel=source_channel,
+                                source_message_id=msg.id,
+                                raw_text=split_text,
+                                split_idx=split_idx,
+                                source_link=build_source_url(source_channel, msg.id),
+                                published_at=msg.date,
+                                raw_title=extract_raw_title(split_text),
+                            )
+                        )
+                    )
+
+            source_saved, source_rejected = await process_tasks(source_channel, len(messages), tasks)
             total_processed += len(messages)
-            logger.info("Channel summary %s: processed=%s saved=%s", source_channel, len(messages), channel_saved)
+            total_saved += source_saved
+            total_rejected += source_rejected
+            processed_sources += 1
+
+        if hh_enabled():
+            hh_candidates = await asyncio.to_thread(fetch_hh_vacancies)
+            hh_tasks = [
+                asyncio.create_task(
+                    enrich_candidate(
+                        source_channel=candidate["source_channel"],
+                        source_message_id=candidate["source_message_id"],
+                        raw_text=candidate["raw_text"],
+                        split_idx=0,
+                        source_link=candidate.get("source_link"),
+                        published_at=candidate.get("published_at"),
+                        raw_title=candidate.get("raw_title"),
+                    )
+                )
+                for candidate in hh_candidates
+            ]
+            source_saved, source_rejected = await process_tasks(HH_SOURCE_LABEL, len(hh_candidates), hh_tasks)
+            total_processed += len(hh_candidates)
+            total_saved += source_saved
+            total_rejected += source_rejected
+            processed_sources += 1
 
         logger.info(
-            "Total summary: channels=%s processed=%s rejected=%s saved=%s",
-            len(source_channels),
+            "Total summary: sources=%s processed=%s rejected=%s saved=%s",
+            processed_sources,
             total_processed,
             total_rejected,
             total_saved,

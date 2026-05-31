@@ -34,6 +34,12 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           TELETHON_SESSION_NAME: telegram_session
           FETCH_LIMIT: 30
+          HH_ENABLED: ${{ vars.HH_ENABLED }}
+          HH_MAX_PAGES: ${{ vars.HH_MAX_PAGES }}
+          HH_PER_PAGE: ${{ vars.HH_PER_PAGE }}
+          HH_MAX_WORKERS: ${{ vars.HH_MAX_WORKERS }}
+          HH_TIMEOUT: ${{ vars.HH_TIMEOUT }}
+          HH_USER_AGENT: ${{ vars.HH_USER_AGENT }}
           ENABLE_AI_ENRICHMENT: ${{ secrets.ENABLE_AI_ENRICHMENT }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL }}
