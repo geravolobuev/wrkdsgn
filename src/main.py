@@ -88,6 +88,20 @@ def to_iso(ts) -> str | None:
     return ts.astimezone(timezone.utc).isoformat()
 
 
+def derive_vacancy_status(ts) -> str:
+    if ts is None:
+        return "active"
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    now = datetime.now(timezone.utc)
+    age_days = (now - ts.astimezone(timezone.utc)).days
+    if age_days <= 30:
+        return "active"
+    if age_days <= 60:
+        return "stale"
+    return "archived"
+
+
 def slugify(value: str) -> str:
     cleaned = re.sub(r"[^a-zA-Z0-9]+", "-", value).strip("-").lower()
     return cleaned[:90] if cleaned else "job"
@@ -193,9 +207,24 @@ def upsert_vacancy_embedding(supabase: Client, vacancy_id: int, source_text: str
         raise
 
 
+def refresh_recent_vacancy_statuses(supabase: Client) -> None:
+    try:
+        res = supabase.rpc("refresh_recent_vacancy_statuses").execute()
+        updated = res.data if isinstance(res.data, int) else 0
+        logger.info("Vacancy status refresh updated=%s", updated)
+    except APIError as exc:
+        payload = getattr(exc, "args", [None])[0]
+        code = payload.get("code") if isinstance(payload, dict) else None
+        if code in {"42883", "42P01", "42703"}:
+            logger.warning("Vacancy lifecycle SQL function not ready, skip status refresh")
+            return
+        raise
+
+
 async def run() -> None:
     validate_env()
     supabase = make_supabase()
+    refresh_recent_vacancy_statuses(supabase)
     source_channels = parse_source_channels()
 
     logger.info("MVP scope channels=%s ai_concurrency=%s", source_channels, AI_CONCURRENCY)
@@ -354,6 +383,7 @@ async def run() -> None:
                     "seniority": ai.get("grade"),
                     "employment_type": ai.get("employment_type"),
                     "work_format": ai.get("work_format"),
+                    "status": derive_vacancy_status(msg.date),
                     "enriched_at": datetime.now(timezone.utc).isoformat(),
                     "enrichment_version": ENRICHMENT_VERSION,
                     "enrichment_hash": content_hash,

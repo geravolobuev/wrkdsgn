@@ -5,8 +5,9 @@ export async function getJobBySlug(slug: string): Promise<Job | null> {
   const { data, error } = await supabase
     .from("vacancies")
     .select(
-      "id,title,canonical_title,display_title,description,source_channel,source_link,created_at,published_at,slug,work_format,employment_type,seniority"
+      "id,status,title,canonical_title,display_title,description,source_channel,source_link,created_at,published_at,slug,work_format,employment_type,seniority"
     )
+    .eq("status", "active")
     .eq("slug", slug)
     .limit(1)
     .maybeSingle();

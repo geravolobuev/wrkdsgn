@@ -1,7 +1,9 @@
 export type Seniority = "Junior" | "Middle" | "Senior" | "Lead" | "Head / Director" | "Unknown" | null;
+export type VacancyStatus = "active" | "stale" | "archived";
 
 export interface Job {
   id: number;
+  status: VacancyStatus;
   title: string | null;
   canonical_title: string | null;
   display_title: string | null;

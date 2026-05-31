@@ -9,6 +9,7 @@ const DEFAULT_MIN_RELEVANCE = 60;
 
 type JobRow = {
   id: number;
+  status: "active" | "stale" | "archived";
   title: string | null;
   canonical_title: string | null;
   display_title: string | null;
@@ -39,12 +40,13 @@ export async function GET(request: NextRequest) {
   const effectiveSpecialization = specialization || "";
 
   const baseSelect =
-    "id,title,canonical_title,display_title,description,source_channel,source_link,created_at,published_at,slug,work_format,employment_type,seniority";
+    "id,status,title,canonical_title,display_title,description,source_channel,source_link,created_at,published_at,slug,work_format,employment_type,seniority";
 
   let query = supabase
     .from("vacancies")
     .select(baseSelect, { count: "exact" })
     .eq("is_job", true)
+    .eq("status", "active")
     .order("published_at", { ascending: false, nullsFirst: false })
     .order("created_at", { ascending: false })
     .range(from, to);
@@ -92,6 +94,7 @@ export async function GET(request: NextRequest) {
             .from("vacancies")
             .select("id")
             .eq("is_job", true)
+            .eq("status", "active")
             .or(orParts.join(","))
             .limit(500);
           if (!textErr && textRows) {
@@ -102,7 +105,12 @@ export async function GET(request: NextRequest) {
 
         const ids = [...textIds, ...semanticIds.filter((id: number) => !textIds.includes(id))];
         if (ids.length > 0) {
-          let semQuery = supabase.from("vacancies").select(baseSelect).eq("is_job", true).in("id", ids);
+          let semQuery = supabase
+            .from("vacancies")
+            .select(baseSelect)
+            .eq("is_job", true)
+            .eq("status", "active")
+            .in("id", ids);
           if (effectiveSpecialization) semQuery = semQuery.eq("canonical_title", effectiveSpecialization);
           if (seniority) semQuery = semQuery.eq("seniority", seniority);
           if (workFormat) semQuery = semQuery.eq("work_format", workFormat);
