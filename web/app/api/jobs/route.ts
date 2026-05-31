@@ -7,6 +7,22 @@ import { supabase } from "@/lib/supabase";
 const PAGE_SIZE = 20;
 const DEFAULT_MIN_RELEVANCE = 60;
 
+type JobRow = {
+  id: number;
+  title: string | null;
+  canonical_title: string | null;
+  display_title: string | null;
+  description: string | null;
+  source_channel: string;
+  source_link: string | null;
+  created_at: string;
+  published_at: string | null;
+  slug: string | null;
+  work_format: string | null;
+  employment_type: string | null;
+  seniority: string | null;
+};
+
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
 
@@ -84,7 +100,7 @@ export async function GET(request: NextRequest) {
           }
         }
 
-        const ids = [...textIds, ...semanticIds.filter((id) => !textIds.includes(id))];
+        const ids = [...textIds, ...semanticIds.filter((id: number) => !textIds.includes(id))];
         if (ids.length > 0) {
           let semQuery = supabase.from("vacancies").select(baseSelect).eq("is_job", true).in("id", ids);
           if (effectiveSpecialization) semQuery = semQuery.eq("canonical_title", effectiveSpecialization);
@@ -99,14 +115,18 @@ export async function GET(request: NextRequest) {
           if (!semJobsErr && semJobs) {
             const rank = new Map<number, number>();
             ids.forEach((id: number, idx: number) => rank.set(id, idx));
-            let ordered = [...semJobs].sort((a, b) => (rank.get(a.id) ?? 10_000) - (rank.get(b.id) ?? 10_000));
+            let ordered = [...semJobs].sort(
+              (a: JobRow, b: JobRow) => (rank.get(a.id) ?? 10_000) - (rank.get(b.id) ?? 10_000)
+            );
 
             if (q && rerankEnabled) {
               const rerank = await rerankByIntent(q, ordered);
               if (rerank.orderedIds) {
                 const rr = new Map<number, number>();
-                rerank.orderedIds.forEach((id, idx) => rr.set(id, idx));
-                ordered = [...ordered].sort((a, b) => (rr.get(a.id) ?? 10_000) - (rr.get(b.id) ?? 10_000));
+                rerank.orderedIds.forEach((id: number, idx: number) => rr.set(id, idx));
+                ordered = [...ordered].sort(
+                  (a: JobRow, b: JobRow) => (rr.get(a.id) ?? 10_000) - (rr.get(b.id) ?? 10_000)
+                );
                 debug.rerank_reason = rerank.reason || "ok";
                 if (rerank.intentSummary) debug.intent_summary = rerank.intentSummary;
 
@@ -120,8 +140,10 @@ export async function GET(request: NextRequest) {
                   const threshold = Number.isFinite(thresholdRaw) ? thresholdRaw : DEFAULT_MIN_RELEVANCE;
                   debug.min_relevance_score = threshold;
 
-                  const relevantOnly = ordered.filter((job) => scoredMap.get(job.id)?.isRelevant === true);
-                  const byScore = relevantOnly.filter((job) => (scoredMap.get(job.id)?.score ?? 0) >= threshold);
+                  const relevantOnly = ordered.filter((job: JobRow) => scoredMap.get(job.id)?.isRelevant === true);
+                  const byScore = relevantOnly.filter(
+                    (job: JobRow) => (scoredMap.get(job.id)?.score ?? 0) >= threshold
+                  );
                   const filtered = byScore.length > 0 ? byScore : relevantOnly;
                   if (filtered.length > 0) {
                     ordered = filtered;
@@ -133,14 +155,16 @@ export async function GET(request: NextRequest) {
                   // Keep query expansion text matches in recall even after strict relevance filtering.
                   if (textIds.length > 0) {
                     const textSet = new Set(textIds);
-                    const textBackfill = semJobs.filter((j) => textSet.has(j.id) && !ordered.some((x) => x.id === j.id));
+                    const textBackfill = semJobs.filter(
+                      (j: JobRow) => textSet.has(j.id) && !ordered.some((x: JobRow) => x.id === j.id)
+                    );
                     if (textBackfill.length) {
                       ordered = [...ordered, ...textBackfill];
                       debug.text_backfill = textBackfill.length;
                     }
                   }
 
-                  ordered = ordered.map((job) => {
+                  ordered = ordered.map((job: JobRow) => {
                     const scored = scoredMap.get(job.id);
                     return {
                       ...job,
