@@ -40,6 +40,7 @@ jobs:
           HH_MAX_WORKERS: ${{ vars.HH_MAX_WORKERS }}
           HH_TIMEOUT: ${{ vars.HH_TIMEOUT }}
           HH_USER_AGENT: ${{ vars.HH_USER_AGENT }}
+          HH_REQUEST_PAUSE_SECONDS: ${{ vars.HH_REQUEST_PAUSE_SECONDS }}
           ENABLE_AI_ENRICHMENT: ${{ secrets.ENABLE_AI_ENRICHMENT }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL }}

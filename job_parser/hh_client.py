@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from typing import Any
@@ -14,6 +15,34 @@ logger = logging.getLogger(__name__)
 HH_API_URL = "https://api.hh.ru/vacancies"
 HH_SOURCE_CHANNEL = "hh.ru"
 HH_PER_PAGE = 50
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    return int(raw)
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    return float(raw)
+
+
+def _expand_query_groups(raw_queries: list[str]) -> list[str]:
+    phrases: list[str] = []
+    seen: set[str] = set()
+    for group in raw_queries:
+        for part in re.split(r"\s+OR\s+", group, flags=re.IGNORECASE):
+            phrase = _clean_text(part)
+            lowered = phrase.lower()
+            if not phrase or lowered in seen:
+                continue
+            seen.add(lowered)
+            phrases.append(phrase)
+    return phrases
 
 HH_SEARCH_QUERIES = [
     "graphic designer OR visual designer OR brand designer OR communication designer OR marketing designer OR editorial designer OR packaging designer",
@@ -27,6 +56,8 @@ HH_SEARCH_QUERIES = [
     "иллюстратор OR типограф OR дизайнер шрифтов",
     "арт директор OR креативный директор OR дизайн директор OR руководитель дизайна",
 ]
+
+HH_SEARCH_PHRASES = _expand_query_groups(HH_SEARCH_QUERIES)
 
 REJECT_ROLE_PATTERNS = [
     r"\bux\b",
@@ -281,13 +312,29 @@ def _fetch_hh_page(
         "page": page,
         "per_page": per_page,
         "only_with_salary": "false",
+        "host": "hh.ru",
+        "locale": "RU",
+        "search_field": "name",
     }
     response = requests.get(
         HH_API_URL,
         params=params,
         timeout=timeout,
-        headers={"User-Agent": user_agent},
+        headers={
+            "HH-User-Agent": user_agent,
+            "User-Agent": user_agent,
+            "Accept": "application/json",
+        },
     )
+    if response.status_code >= 400:
+        body_preview = response.text[:400].replace("\n", " ")
+        logger.warning(
+            "HH fetch error status=%s query=%s page=%s body=%s",
+            response.status_code,
+            query,
+            page,
+            body_preview,
+        )
     response.raise_for_status()
     data = response.json()
     items = data.get("items")
@@ -297,29 +344,68 @@ def _fetch_hh_page(
     return [item for item in items if isinstance(item, dict) and item.get("id")]
 
 
+def _fetch_hh_query(
+    *,
+    query: str,
+    max_pages: int,
+    per_page: int,
+    timeout: int,
+    user_agent: str,
+    request_pause_seconds: float,
+) -> list[dict[str, Any]]:
+    collected: list[dict[str, Any]] = []
+    for page in range(max_pages):
+        items = _fetch_hh_page(
+            query=query,
+            page=page,
+            per_page=per_page,
+            timeout=timeout,
+            user_agent=user_agent,
+        )
+        if not items:
+            break
+        collected.extend(items)
+        if len(items) < per_page:
+            break
+        if request_pause_seconds > 0:
+            time.sleep(request_pause_seconds)
+    return collected
+
+
 def fetch_hh_vacancies() -> list[dict[str, Any]]:
     if os.getenv("HH_ENABLED", "false").lower() != "true":
         return []
 
-    max_pages = max(1, int(os.getenv("HH_MAX_PAGES", "10")))
-    per_page = min(HH_PER_PAGE, max(1, int(os.getenv("HH_PER_PAGE", str(HH_PER_PAGE)))))
-    max_workers = max(2, int(os.getenv("HH_MAX_WORKERS", "8")))
+    max_pages = max(1, _env_int("HH_MAX_PAGES", 10))
+    per_page = min(HH_PER_PAGE, max(1, _env_int("HH_PER_PAGE", HH_PER_PAGE)))
+    max_workers = max(1, _env_int("HH_MAX_WORKERS", 4))
     user_agent = os.getenv("HH_USER_AGENT", "wrkdsgn/1.0 (hello@wrkdsgn.vercel.app)")
-    timeout = int(os.getenv("HH_TIMEOUT", "20"))
+    timeout = _env_int("HH_TIMEOUT", 20)
+    request_pause_seconds = max(0.0, _env_float("HH_REQUEST_PAUSE_SECONDS", 0.3))
+
+    logger.info(
+        "HH config phrases=%s max_pages=%s per_page=%s max_workers=%s timeout=%s pause=%s",
+        len(HH_SEARCH_PHRASES),
+        max_pages,
+        per_page,
+        max_workers,
+        timeout,
+        request_pause_seconds,
+    )
 
     unique: dict[int, dict[str, Any]] = {}
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = [
             executor.submit(
-                _fetch_hh_page,
+                _fetch_hh_query,
                 query=query,
-                page=page,
+                max_pages=max_pages,
                 per_page=per_page,
                 timeout=timeout,
                 user_agent=user_agent,
+                request_pause_seconds=request_pause_seconds,
             )
-            for query in HH_SEARCH_QUERIES
-            for page in range(max_pages)
+            for query in HH_SEARCH_PHRASES
         ]
         for future in as_completed(futures):
             try:
