@@ -36,7 +36,7 @@ def _expand_query_groups(raw_queries: list[str]) -> list[str]:
     seen: set[str] = set()
     for group in raw_queries:
         for part in re.split(r"\s+OR\s+", group, flags=re.IGNORECASE):
-            phrase = _clean_text(part)
+            phrase = re.sub(r"\s+", " ", part).strip()
             lowered = phrase.lower()
             if not phrase or lowered in seen:
                 continue
