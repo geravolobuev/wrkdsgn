@@ -3,9 +3,14 @@ name: Scrape Telegram Jobs
 on:
   workflow_dispatch:
 
+concurrency:
+  group: scrape-telegram-jobs
+  cancel-in-progress: false
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
